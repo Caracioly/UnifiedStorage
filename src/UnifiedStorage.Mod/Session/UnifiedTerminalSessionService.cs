@@ -934,47 +934,52 @@ public sealed class UnifiedTerminalSessionService
             return;
         }
 
-        var remaining = amount;
         var inventory = _player.GetInventory();
-        while (remaining > 0)
+        var movedTotal = ChunkedTransfer.Move(amount, 999, chunkAmount =>
         {
-            var stackSize = Math.Min(999, remaining);
-            var stack = CreateItemStack(key, stackSize);
+            var stack = CreateItemStack(key, chunkAmount);
             if (stack == null)
             {
-                break;
+                return 0;
             }
 
-            if (inventory.AddItem(stack))
-            {
-                remaining -= stackSize;
-                continue;
-            }
+            return TryAddItemMeasured(inventory, key, stack, chunkAmount);
+        });
 
-            var moved = false;
-            for (var split = stackSize / 2; split >= 1; split /= 2)
-            {
-                var partial = CreateItemStack(key, split);
-                if (partial == null || !inventory.AddItem(partial))
-                {
-                    continue;
-                }
-
-                remaining -= split;
-                moved = true;
-                break;
-            }
-
-            if (!moved)
-            {
-                break;
-            }
-        }
-
+        var remaining = amount - movedTotal;
         if (remaining > 0)
         {
             DropNearPlayer(key, remaining);
         }
+    }
+
+    private static int TryAddItemMeasured(Inventory inventory, ItemKey key, ItemDrop.ItemData stack, int requestedAmount)
+    {
+        var before = GetTotalAmount(inventory, key);
+        inventory.AddItem(stack);
+        var after = GetTotalAmount(inventory, key);
+        return ChunkedTransfer.ClampMeasuredMove(requestedAmount, before, after);
+    }
+
+    private static int GetTotalAmount(Inventory inventory, ItemKey key)
+    {
+        var total = 0;
+        foreach (var item in inventory.GetAllItems())
+        {
+            if (item?.m_dropPrefab == null || item.m_stack <= 0)
+            {
+                continue;
+            }
+
+            if (item.m_dropPrefab.name == key.PrefabName
+                && item.m_quality == key.Quality
+                && item.m_variant == key.Variant)
+            {
+                total += item.m_stack;
+            }
+        }
+
+        return total;
     }
 
     private void DropNearPlayer(ItemKey key, int amount)

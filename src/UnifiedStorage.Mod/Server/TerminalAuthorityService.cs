@@ -761,16 +761,18 @@ public sealed class TerminalAuthorityService
                 continue;
             }
 
-            while (remaining > 0)
+            var movedInChest = ChunkedTransfer.Move(remaining, 999, chunkAmount =>
             {
-                var stack = CreateItemStack(key, Math.Min(999, remaining));
-                if (stack == null || !inv.AddItem(stack))
+                var stack = CreateItemStack(key, chunkAmount);
+                if (stack == null)
                 {
-                    break;
+                    return 0;
                 }
 
-                remaining -= stack.m_stack;
-            }
+                return TryAddItemMeasured(inv, key, stack, chunkAmount);
+            });
+
+            remaining -= movedInChest;
         }
 
         return amount - remaining;
@@ -809,49 +811,39 @@ public sealed class TerminalAuthorityService
             return 0;
         }
 
-        var added = 0;
-        var remaining = amount;
         var inventory = player.GetInventory();
-        while (remaining > 0)
+        return ChunkedTransfer.Move(amount, 999, chunkAmount =>
         {
-            var stackAmount = Math.Min(999, remaining);
-            var stack = CreateItemStack(key, stackAmount);
+            var stack = CreateItemStack(key, chunkAmount);
             if (stack == null)
             {
-                break;
+                return 0;
             }
 
-            if (inventory.AddItem(stack))
+            return TryAddItemMeasured(inventory, key, stack, chunkAmount);
+        });
+    }
+
+    private static int TryAddItemMeasured(Inventory inventory, ItemKey key, ItemDrop.ItemData stack, int requestedAmount)
+    {
+        var before = GetTotalAmount(inventory, key);
+        inventory.AddItem(stack);
+        var after = GetTotalAmount(inventory, key);
+        return ChunkedTransfer.ClampMeasuredMove(requestedAmount, before, after);
+    }
+
+    private static int GetTotalAmount(Inventory inventory, ItemKey key)
+    {
+        var total = 0;
+        foreach (var item in inventory.GetAllItems())
+        {
+            if (MatchKey(item, key))
             {
-                added += stackAmount;
-                remaining -= stackAmount;
-                continue;
+                total += item.m_stack;
             }
-
-            var movedChunk = 0;
-            var chunk = Math.Max(1, stackAmount / 2);
-            while (chunk >= 1)
-            {
-                var smaller = CreateItemStack(key, chunk);
-                if (smaller != null && inventory.AddItem(smaller))
-                {
-                    movedChunk = chunk;
-                    break;
-                }
-
-                chunk /= 2;
-            }
-
-            if (movedChunk <= 0)
-            {
-                break;
-            }
-
-            added += movedChunk;
-            remaining -= movedChunk;
         }
 
-        return added;
+        return total;
     }
 
     private static bool MatchKey(ItemDrop.ItemData item, ItemKey key)
