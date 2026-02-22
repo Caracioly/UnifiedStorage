@@ -2,22 +2,14 @@ using System.Collections.Generic;
 using System.Linq;
 using UnifiedStorage.Mod.Config;
 using UnifiedStorage.Mod.Domain;
-using UnifiedStorage.Mod.Pieces;
 using UnifiedStorage.Mod.Models;
+using UnifiedStorage.Mod.Pieces;
 using UnityEngine;
 
 namespace UnifiedStorage.Mod.Server;
 
 public sealed class ContainerScanner : IContainerScanner
 {
-    private static readonly HashSet<string> VanillaChestPrefabNames = new(System.StringComparer.OrdinalIgnoreCase)
-    {
-        "piece_chest",
-        "piece_chest_wood",
-        "piece_chest_private",
-        "piece_chest_blackmetal"
-    };
-
     private readonly StorageConfig _config;
 
     public ContainerScanner(StorageConfig config)
@@ -34,7 +26,8 @@ public sealed class ContainerScanner : IContainerScanner
             .Where(IsStaticChest)
             .Where(container => ignoreContainer == null || container != ignoreContainer)
             .Where(container => !UnifiedChestTerminalMarker.IsTerminalContainer(container))
-            .Where(container => !onlyVanillaChests || IsVanillaChest(container))
+            .Where(container => !onlyVanillaChests || ChestInclusionRules.IsVanillaChest(container))
+            .Where(ChestInclusionRules.IsIncludedInUnified)
             .Select(container =>
             {
                 var distance = Vector3.Distance(center, container.transform.position);
@@ -79,22 +72,5 @@ public sealed class ContainerScanner : IContainerScanner
         }
 
         return container.GetInstanceID().ToString();
-    }
-
-    private static bool IsVanillaChest(Container container)
-    {
-        var prefabName = NormalizePrefabName(container.gameObject.name);
-        return VanillaChestPrefabNames.Contains(prefabName);
-    }
-
-    private static string NormalizePrefabName(string name)
-    {
-        const string cloneSuffix = "(Clone)";
-        if (name.EndsWith(cloneSuffix, System.StringComparison.Ordinal))
-        {
-            return name.Substring(0, name.Length - cloneSuffix.Length);
-        }
-
-        return name;
     }
 }

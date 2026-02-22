@@ -26,8 +26,10 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     private const float FooterPanelHeight = 44f;
     private const float GridTopReserve = 124f;
     private const float WorldChangeRefreshMinInterval = 0.2f;
+    private const float ChestToggleTopOffset = -8f;
 
     private static readonly System.Reflection.FieldInfo? ContainerField = AccessTools.Field(typeof(InventoryGui), "m_container");
+    private static readonly System.Reflection.FieldInfo? CurrentContainerField = AccessTools.Field(typeof(InventoryGui), "m_currentContainer");
     private static readonly System.Reflection.FieldInfo? ContainerGridField = AccessTools.Field(typeof(InventoryGui), "m_containerGrid");
     private static readonly System.Reflection.FieldInfo? ContainerNameField = AccessTools.Field(typeof(InventoryGui), "m_containerName");
     private static readonly System.Reflection.FieldInfo? TakeAllButtonField = AccessTools.Field(typeof(InventoryGui), "m_takeAllButton");
@@ -50,13 +52,17 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     private RectTransform? _nativeUiRoot;
     private TMP_Text? _metaText;
     private TMP_InputField? _searchInputField;
+    private RectTransform? _chestToggleRoot;
+    private Toggle? _chestIncludeToggle;
     private RectTransform? _containerRect;
+    private Container? _boundChestForToggle;
     private Vector2 _originalContainerSize;
     private int _originalGridHeight;
     private Vector2 _originalGridOffsetMin;
     private Vector2 _originalGridOffsetMax;
     private bool _layoutCaptured;
     private bool _nativeBuilt;
+    private bool _isApplyingChestToggle;
     private string _lastSearch = string.Empty;
     private int _lastUiRevision = -1;
     private bool _trackedInventoryDirty;
@@ -143,6 +149,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     {
         _blockGameInput = false;
         _lastSearch = string.Empty;
+        _boundChestForToggle = null;
         _trackedInventoryDirty = false;
         _isApplyingRefresh = false;
         if (_searchInputField != null)
@@ -153,6 +160,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _session?.EndSession();
         RestoreLayout();
         SetNativeUiVisible(false);
+        SetChestToggleVisible(false);
         _lastUiRevision = -1;
     }
 
@@ -164,6 +172,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     internal void OnInventoryGuiUpdate(InventoryGui gui)
     {
         EnsureNativeUi(gui);
+        UpdateChestInclusionToggle(gui);
         if (_session == null || !_session.IsActive || !InventoryGui.IsVisible() || !gui.IsContainerOpen())
         {
             _blockGameInput = false;
@@ -347,8 +356,137 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _searchInputField.onSelect.AddListener(_ => { _blockGameInput = true; });
         _searchInputField.onDeselect.AddListener(_ => { _blockGameInput = false; });
 
+        EnsureChestToggleUi(container, containerName);
+
         _nativeBuilt = true;
         SetNativeUiVisible(false);
+        SetChestToggleVisible(false);
+    }
+
+    private void EnsureChestToggleUi(RectTransform container, TMP_Text? containerName)
+    {
+        if (_chestToggleRoot != null && _chestIncludeToggle != null)
+        {
+            return;
+        }
+
+        var toggleRootGo = new GameObject("US_ChestIncludeToggle", typeof(RectTransform), typeof(Toggle));
+        toggleRootGo.transform.SetParent(container, false);
+        _chestToggleRoot = toggleRootGo.GetComponent<RectTransform>();
+        _chestToggleRoot.anchorMin = new Vector2(1f, 1f);
+        _chestToggleRoot.anchorMax = new Vector2(1f, 1f);
+        _chestToggleRoot.pivot = new Vector2(1f, 1f);
+        _chestToggleRoot.anchoredPosition = new Vector2(-14f, ChestToggleTopOffset);
+        _chestToggleRoot.sizeDelta = new Vector2(190f, 20f);
+
+        var toggle = toggleRootGo.GetComponent<Toggle>();
+        toggle.transition = Selectable.Transition.None;
+        toggle.isOn = true;
+        _chestIncludeToggle = toggle;
+
+        var backgroundGo = new GameObject("Background", typeof(RectTransform), typeof(Image));
+        backgroundGo.transform.SetParent(toggleRootGo.transform, false);
+        var backgroundRect = backgroundGo.GetComponent<RectTransform>();
+        backgroundRect.anchorMin = new Vector2(0f, 0.5f);
+        backgroundRect.anchorMax = new Vector2(0f, 0.5f);
+        backgroundRect.pivot = new Vector2(0f, 0.5f);
+        backgroundRect.anchoredPosition = Vector2.zero;
+        backgroundRect.sizeDelta = new Vector2(16f, 16f);
+        var backgroundImage = backgroundGo.GetComponent<Image>();
+        backgroundImage.color = new Color(0f, 0f, 0f, 0.62f);
+
+        var checkmarkGo = new GameObject("Checkmark", typeof(RectTransform), typeof(Image));
+        checkmarkGo.transform.SetParent(backgroundGo.transform, false);
+        var checkmarkRect = checkmarkGo.GetComponent<RectTransform>();
+        checkmarkRect.anchorMin = new Vector2(0.5f, 0.5f);
+        checkmarkRect.anchorMax = new Vector2(0.5f, 0.5f);
+        checkmarkRect.pivot = new Vector2(0.5f, 0.5f);
+        checkmarkRect.anchoredPosition = Vector2.zero;
+        checkmarkRect.sizeDelta = new Vector2(11f, 11f);
+        var checkmarkImage = checkmarkGo.GetComponent<Image>();
+        checkmarkImage.color = new Color(0.82f, 0.93f, 0.66f, 1f);
+
+        var labelGo = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
+        labelGo.transform.SetParent(toggleRootGo.transform, false);
+        var labelRect = labelGo.GetComponent<RectTransform>();
+        labelRect.anchorMin = new Vector2(0f, 0.5f);
+        labelRect.anchorMax = new Vector2(1f, 0.5f);
+        labelRect.pivot = new Vector2(0f, 0.5f);
+        labelRect.anchoredPosition = new Vector2(22f, 0f);
+        labelRect.sizeDelta = new Vector2(-22f, 18f);
+        var labelText = labelGo.GetComponent<TextMeshProUGUI>();
+        labelText.text = "Include In Unified";
+        if (containerName != null)
+        {
+            labelText.font = containerName.font;
+            labelText.fontSize = containerName.fontSize * 0.52f;
+            labelText.color = containerName.color;
+            labelText.fontSharedMaterial = containerName.fontSharedMaterial;
+        }
+        else
+        {
+            labelText.fontSize = 14f;
+            labelText.color = Color.white;
+        }
+        labelText.alignment = TextAlignmentOptions.MidlineLeft;
+
+        toggle.targetGraphic = backgroundImage;
+        toggle.graphic = checkmarkImage;
+        toggle.onValueChanged.AddListener(OnChestIncludeToggleChanged);
+    }
+
+    private void UpdateChestInclusionToggle(InventoryGui gui)
+    {
+        if (_chestToggleRoot == null || _chestIncludeToggle == null || !InventoryGui.IsVisible() || !gui.IsContainerOpen())
+        {
+            _boundChestForToggle = null;
+            SetChestToggleVisible(false);
+            return;
+        }
+
+        var currentContainer = GetCurrentContainer(gui);
+        if (currentContainer == null
+            || UnifiedChestTerminalMarker.IsTerminalContainer(currentContainer)
+            || !ChestInclusionRules.IsVanillaChest(currentContainer))
+        {
+            _boundChestForToggle = null;
+            SetChestToggleVisible(false);
+            return;
+        }
+
+        SetChestToggleVisible(true);
+        var includeInUnified = ChestInclusionRules.IsIncludedInUnified(currentContainer);
+        if (!ReferenceEquals(_boundChestForToggle, currentContainer) || _chestIncludeToggle.isOn != includeInUnified)
+        {
+            _isApplyingChestToggle = true;
+            _chestIncludeToggle.isOn = includeInUnified;
+            _isApplyingChestToggle = false;
+            _boundChestForToggle = currentContainer;
+        }
+    }
+
+    private void OnChestIncludeToggleChanged(bool includeInUnified)
+    {
+        if (_isApplyingChestToggle)
+        {
+            return;
+        }
+
+        var gui = InventoryGui.instance;
+        var currentContainer = gui != null ? GetCurrentContainer(gui) : null;
+        if (currentContainer == null
+            || UnifiedChestTerminalMarker.IsTerminalContainer(currentContainer)
+            || !ChestInclusionRules.IsVanillaChest(currentContainer))
+        {
+            return;
+        }
+
+        ChestInclusionRules.TrySetIncludedInUnified(currentContainer, includeInUnified);
+    }
+
+    private static Container? GetCurrentContainer(InventoryGui gui)
+    {
+        return CurrentContainerField?.GetValue(gui) as Container;
     }
 
     private void UpdateContainerName(InventoryGui gui)
@@ -538,6 +676,14 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         if (_nativeUiRoot != null)
         {
             _nativeUiRoot.gameObject.SetActive(visible);
+        }
+    }
+
+    private void SetChestToggleVisible(bool visible)
+    {
+        if (_chestToggleRoot != null)
+        {
+            _chestToggleRoot.gameObject.SetActive(visible);
         }
     }
 

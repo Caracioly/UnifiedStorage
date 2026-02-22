@@ -12,6 +12,7 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 - Type-based ordering with lightweight material grouping (for example: ores/metals).
 - Deposit and withdraw use normal chest interactions.
 - `Take all` is disabled in the terminal to avoid incorrect behavior.
+- Vanilla chest UI now includes `Include In Unified` toggle (default: enabled).
 - Multiplayer consistency is server-authoritative with reservation/timeout flow.
 
 ## Scope
