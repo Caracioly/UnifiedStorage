@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using BepInEx;
 using HarmonyLib;
 using Jotunn.Managers;
@@ -19,7 +19,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 {
     public const string PluginGuid = "andre.valheim.unifiedstorage";
     public const string PluginName = "Unified Storage";
-    public const string PluginVersion = "1.0.1";
+    public const string PluginVersion = "1.0.2";
     private const int VisibleGridRows = 7;
     private const float FooterPanelBottomOffset = -62f;
     private const float FooterPanelHeight = 44f;

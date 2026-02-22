@@ -1,4 +1,4 @@
-﻿# Unified Storage (Valheim 0.221.12)
+# Unified Storage (Valheim 0.221.12)
 
 Unified storage for Valheim using a dedicated terminal, without changing vanilla chest behavior.
 
