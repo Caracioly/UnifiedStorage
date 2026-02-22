@@ -10,6 +10,14 @@ namespace UnifiedStorage.Mod.Server;
 
 public sealed class ContainerScanner : IContainerScanner
 {
+    private static readonly HashSet<string> VanillaChestPrefabNames = new(System.StringComparer.OrdinalIgnoreCase)
+    {
+        "piece_chest",
+        "piece_chest_wood",
+        "piece_chest_private",
+        "piece_chest_blackmetal"
+    };
+
     private readonly StorageConfig _config;
 
     public ContainerScanner(StorageConfig config)
@@ -21,7 +29,7 @@ public sealed class ContainerScanner : IContainerScanner
     {
         var maxCount = _config.MaxContainersScanned.Value;
         var nearby = Object
-            .FindObjectsOfType<Container>()
+            .FindObjectsByType<Container>(FindObjectsSortMode.None)
             .Where(container => container != null)
             .Where(IsStaticChest)
             .Where(container => ignoreContainer == null || container != ignoreContainer)
@@ -75,10 +83,18 @@ public sealed class ContainerScanner : IContainerScanner
 
     private static bool IsVanillaChest(Container container)
     {
-        var name = container.gameObject.name;
-        return name.StartsWith("piece_chest_wood", System.StringComparison.OrdinalIgnoreCase)
-               || name.StartsWith("piece_chest", System.StringComparison.OrdinalIgnoreCase)
-               || name.StartsWith("piece_chest_private", System.StringComparison.OrdinalIgnoreCase)
-               || name.StartsWith("piece_chest_blackmetal", System.StringComparison.OrdinalIgnoreCase);
+        var prefabName = NormalizePrefabName(container.gameObject.name);
+        return VanillaChestPrefabNames.Contains(prefabName);
+    }
+
+    private static string NormalizePrefabName(string name)
+    {
+        const string cloneSuffix = "(Clone)";
+        if (name.EndsWith(cloneSuffix, System.StringComparison.Ordinal))
+        {
+            return name.Substring(0, name.Length - cloneSuffix.Length);
+        }
+
+        return name;
     }
 }

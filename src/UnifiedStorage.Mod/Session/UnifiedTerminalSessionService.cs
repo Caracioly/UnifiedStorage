@@ -216,7 +216,18 @@ public sealed class UnifiedTerminalSessionService
         var width = Math.Max(1, GetInventoryWidth(inventory));
         var filtered = _workingTotals
             .Where(kvp => kvp.Value > 0 && MatchesSearch(GetDisplayName(kvp.Key)))
-            .OrderBy(kvp => GetDisplayName(kvp.Key))
+            .Select(kvp => new
+            {
+                Entry = kvp,
+                DisplayName = GetDisplayName(kvp.Key),
+                TypeOrder = GetItemTypeOrder(kvp.Key),
+                SubgroupOrder = GetSubgroupOrder(kvp.Key)
+            })
+            .OrderBy(x => x.TypeOrder)
+            .ThenBy(x => x.SubgroupOrder)
+            .ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(x => x.Entry.Value)
+            .Select(x => x.Entry)
             .ToList();
 
         var totalVirtualStacks = filtered.Sum(kvp => (int)Math.Ceiling(kvp.Value / 999f));
@@ -414,6 +425,49 @@ public sealed class UnifiedTerminalSessionService
         }
 
         return key.PrefabName;
+    }
+
+    private int GetItemTypeOrder(ItemKey key)
+    {
+        if (_prototypes.TryGetValue(key, out var prototype))
+        {
+            return (int)prototype.m_shared.m_itemType;
+        }
+
+        return int.MaxValue;
+    }
+
+    private static int GetSubgroupOrder(ItemKey key)
+    {
+        if (string.IsNullOrWhiteSpace(key.PrefabName))
+        {
+            return 999;
+        }
+
+        var prefab = key.PrefabName.ToLowerInvariant();
+
+        // Mantem minérios/metais próximos sem custo alto: só checks simples de string.
+        if (prefab.Contains("ore") || prefab.Contains("scrap") || prefab.Contains("metal") || prefab.Contains("ingot") || prefab.Contains("bar"))
+        {
+            return 10;
+        }
+
+        if (prefab.Contains("wood") || prefab.Contains("stone"))
+        {
+            return 20;
+        }
+
+        if (prefab.Contains("hide") || prefab.Contains("leather") || prefab.Contains("scale") || prefab.Contains("chitin"))
+        {
+            return 30;
+        }
+
+        if (prefab.Contains("food") || prefab.Contains("mead") || prefab.Contains("stew") || prefab.Contains("soup") || prefab.Contains("bread"))
+        {
+            return 40;
+        }
+
+        return 100;
     }
 
     private void EnsureStack999(ItemDrop.ItemData item)

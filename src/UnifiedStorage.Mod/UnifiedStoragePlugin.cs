@@ -390,6 +390,22 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         RefreshContainerGrid(InventoryGui.instance);
     }
 
+    internal void OnInventoryGridInteraction(InventoryGrid grid)
+    {
+        if (_session == null || !_session.IsActive || InventoryGui.instance == null || grid == null)
+        {
+            return;
+        }
+
+        var containerGrid = ContainerGridField?.GetValue(InventoryGui.instance) as InventoryGrid;
+        if (!ReferenceEquals(grid, containerGrid))
+        {
+            return;
+        }
+
+        OnContainerInteraction();
+    }
+
     private static bool IsDragInProgress(InventoryGui gui)
     {
         return DragItemField?.GetValue(gui) is ItemDrop.ItemData dragItem && dragItem != null && dragItem.m_stack > 0;

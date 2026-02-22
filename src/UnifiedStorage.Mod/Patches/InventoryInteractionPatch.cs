@@ -5,18 +5,18 @@ namespace UnifiedStorage.Mod.Patches;
 [HarmonyPatch(typeof(InventoryGrid), "OnLeftClick")]
 public static class InventoryGridOnLeftClickPatch
 {
-    private static void Postfix()
+    private static void Postfix(InventoryGrid __instance)
     {
-        UnifiedStoragePlugin.Instance?.OnContainerInteraction();
+        UnifiedStoragePlugin.Instance?.OnInventoryGridInteraction(__instance);
     }
 }
 
 [HarmonyPatch(typeof(InventoryGrid), "OnRightClick")]
 public static class InventoryGridOnRightClickPatch
 {
-    private static void Postfix()
+    private static void Postfix(InventoryGrid __instance)
     {
-        UnifiedStoragePlugin.Instance?.OnContainerInteraction();
+        UnifiedStoragePlugin.Instance?.OnInventoryGridInteraction(__instance);
     }
 }
 
