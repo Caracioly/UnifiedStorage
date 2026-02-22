@@ -45,17 +45,16 @@ public sealed class TerminalAuthorityService
             var now = Time.unscaledTime;
             foreach (var state in _states.Values.ToList())
             {
-                var expired = state.Reservations.Values.Where(r => r.ExpiresAt <= now).ToList();
-                if (expired.Count == 0)
-                {
-                    continue;
-                }
+                state.Subscribers.RemoveWhere(peer => !IsPeerConnected(peer));
 
-                var player = FindPlayerByPeer(0);
+                var expiredOrDisconnected = state.Reservations.Values
+                    .Where(r => r.ExpiresAt <= now || !IsPeerConnected(r.PeerId))
+                    .ToList();
+
                 var anyChange = false;
-                foreach (var reservation in expired)
+                foreach (var reservation in expiredOrDisconnected)
                 {
-                    var restored = AddToChests(state, reservation.Key, reservation.Amount, player);
+                    var restored = AddToChests(state, reservation.Key, reservation.Amount, null);
                     var unresolved = reservation.Amount - restored;
                     if (unresolved > 0)
                     {
@@ -63,17 +62,20 @@ public sealed class TerminalAuthorityService
                     }
 
                     state.Reservations.Remove(reservation.TokenId);
-                    anyChange = true;
+                    anyChange = anyChange || restored > 0 || unresolved > 0;
                 }
 
-                if (!anyChange)
+                if (anyChange)
                 {
-                    continue;
+                    state.Revision++;
+                    var snapshot = BuildSnapshot(state);
+                    deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
                 }
 
-                state.Revision++;
-                var snapshot = BuildSnapshot(state);
-                deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
+                if (state.Subscribers.Count == 0 && state.Reservations.Count == 0)
+                {
+                    _states.Remove(state.TerminalUid);
+                }
             }
         }
 
@@ -97,7 +99,6 @@ public sealed class TerminalAuthorityService
 
             var state = GetOrCreateState(request);
             state.Subscribers.Add(sender);
-            state.SessionId = string.IsNullOrWhiteSpace(request.SessionId) ? state.SessionId : request.SessionId;
 
             var snapshot = BuildSnapshot(state);
             return new OpenSessionResponseDto
@@ -112,6 +113,7 @@ public sealed class TerminalAuthorityService
     public ReserveWithdrawResultDto HandleReserveWithdraw(long sender, ReserveWithdrawRequestDto request)
     {
         List<(IReadOnlyCollection<long> Peers, SessionDeltaDto Delta)> deltas = new();
+        ReserveWithdrawResultDto result;
         lock (_sync)
         {
             var state = GetState(request.TerminalUid);
@@ -122,7 +124,7 @@ public sealed class TerminalAuthorityService
 
             if (IsDuplicateOperation(state, request.OperationId))
             {
-                return new ReserveWithdrawResultDto
+                result = new ReserveWithdrawResultDto
                 {
                     RequestId = request.RequestId,
                     Success = true,
@@ -132,19 +134,22 @@ public sealed class TerminalAuthorityService
                     Revision = state.Revision,
                     Snapshot = BuildSnapshot(state)
                 };
+                return result;
             }
 
             if (request.ExpectedRevision >= 0 && request.ExpectedRevision != state.Revision)
             {
-                return ReserveFailure(request, "Conflict", BuildSnapshot(state), state.Revision);
+                result = ReserveFailure(request, "Conflict", BuildSnapshot(state), state.Revision);
+                return result;
             }
 
-            var player = FindPlayerByPeer(sender);
+            var player = FindPlayerById(request.PlayerId);
             var removed = RemoveFromChests(state, request.Key, request.Amount, player);
             if (removed <= 0)
             {
                 RememberOperation(state, request.OperationId);
-                return ReserveFailure(request, "Not enough items", BuildSnapshot(state), state.Revision);
+                result = ReserveFailure(request, "Not enough items", BuildSnapshot(state), state.Revision);
+                return result;
             }
 
             var token = Guid.NewGuid().ToString("N");
@@ -163,8 +168,7 @@ public sealed class TerminalAuthorityService
             var snapshot = BuildSnapshot(state);
             deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
 
-            EmitDeltas(deltas);
-            return new ReserveWithdrawResultDto
+            result = new ReserveWithdrawResultDto
             {
                 RequestId = request.RequestId,
                 Success = true,
@@ -175,6 +179,9 @@ public sealed class TerminalAuthorityService
                 Snapshot = snapshot
             };
         }
+
+        EmitDeltas(deltas);
+        return result;
     }
 
     public ApplyResultDto HandleCommitReservation(long sender, CommitReservationRequestDto request)
@@ -233,6 +240,7 @@ public sealed class TerminalAuthorityService
     public ApplyResultDto HandleCancelReservation(long sender, CancelReservationRequestDto request)
     {
         List<(IReadOnlyCollection<long> Peers, SessionDeltaDto Delta)> deltas = new();
+        ApplyResultDto result;
         lock (_sync)
         {
             var state = GetState(request.TerminalUid);
@@ -268,7 +276,7 @@ public sealed class TerminalAuthorityService
             }
 
             var cancelAmount = request.Amount > 0 ? Math.Min(request.Amount, reservation.Amount) : reservation.Amount;
-            var player = FindPlayerByPeer(sender);
+            var player = FindPlayerById(request.PlayerId);
             var restored = AddToChests(state, reservation.Key, cancelAmount, player);
             var unresolved = cancelAmount - restored;
             if (unresolved > 0)
@@ -292,8 +300,7 @@ public sealed class TerminalAuthorityService
                 var snapshot = BuildSnapshot(state);
                 deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
                 RememberOperation(state, request.OperationId);
-                EmitDeltas(deltas);
-                return new ApplyResultDto
+                result = new ApplyResultDto
                 {
                     RequestId = request.RequestId,
                     Success = true,
@@ -303,16 +310,22 @@ public sealed class TerminalAuthorityService
                     Revision = state.Revision,
                     Snapshot = snapshot
                 };
+                goto EmitAndReturn;
             }
 
             RememberOperation(state, request.OperationId);
-            return ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Nothing restored", BuildSnapshot(state), state.Revision, "cancel");
+            result = ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Nothing restored", BuildSnapshot(state), state.Revision, "cancel");
         }
+
+    EmitAndReturn:
+        EmitDeltas(deltas);
+        return result;
     }
 
     public ApplyResultDto HandleDeposit(long sender, DepositRequestDto request)
     {
         List<(IReadOnlyCollection<long> Peers, SessionDeltaDto Delta)> deltas = new();
+        ApplyResultDto result;
         lock (_sync)
         {
             var state = GetState(request.TerminalUid);
@@ -339,7 +352,7 @@ public sealed class TerminalAuthorityService
                 return ApplyFailure(request.RequestId, string.Empty, "Conflict", BuildSnapshot(state), state.Revision, "deposit");
             }
 
-            var player = FindPlayerByPeer(sender);
+            var player = FindPlayerById(request.PlayerId);
             if (player == null)
             {
                 RememberOperation(state, request.OperationId);
@@ -375,10 +388,9 @@ public sealed class TerminalAuthorityService
             if (stored > 0)
             {
                 deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
-                EmitDeltas(deltas);
             }
 
-            return new ApplyResultDto
+            result = new ApplyResultDto
             {
                 RequestId = request.RequestId,
                 Success = stored > 0,
@@ -389,6 +401,9 @@ public sealed class TerminalAuthorityService
                 Snapshot = snapshot
             };
         }
+
+        EmitDeltas(deltas);
+        return result;
     }
 
     public void HandleCloseSession(long sender, CloseSessionRequestDto request)
@@ -405,10 +420,10 @@ public sealed class TerminalAuthorityService
             state.Subscribers.Remove(sender);
 
             var cancelledReservations = state.Reservations.Values
-                .Where(r => r.PeerId == sender && string.Equals(r.SessionId, request.SessionId ?? string.Empty, StringComparison.Ordinal))
+                .Where(r => r.PeerId == sender)
                 .ToList();
 
-            var player = FindPlayerByPeer(sender);
+            var player = FindPlayerById(request.PlayerId);
             var anyChanged = false;
             foreach (var reservation in cancelledReservations)
             {
@@ -483,10 +498,6 @@ public sealed class TerminalAuthorityService
         {
             existing.AnchorPosition = new Vector3(request.AnchorX, request.AnchorY, request.AnchorZ);
             existing.Radius = request.Radius;
-            if (!string.IsNullOrWhiteSpace(request.SessionId))
-            {
-                existing.SessionId = request.SessionId;
-            }
 
             return existing;
         }
@@ -494,7 +505,7 @@ public sealed class TerminalAuthorityService
         var created = new TerminalState
         {
             TerminalUid = request.TerminalUid,
-            SessionId = string.IsNullOrWhiteSpace(request.SessionId) ? Guid.NewGuid().ToString("N") : request.SessionId,
+            SessionId = Guid.NewGuid().ToString("N"),
             AnchorPosition = new Vector3(request.AnchorX, request.AnchorY, request.AnchorZ),
             Radius = request.Radius
         };
@@ -890,22 +901,65 @@ public sealed class TerminalAuthorityService
         return 100;
     }
 
-    private static Player? FindPlayerByPeer(long sender)
+    private static Player? FindPlayerById(long playerId)
     {
+        if (playerId <= 0)
+        {
+            return Player.m_localPlayer;
+        }
+
         foreach (var player in Player.GetAllPlayers())
         {
-            if (player != null && player.GetPlayerID() == sender)
+            if (player != null && player.GetPlayerID() == playerId)
             {
                 return player;
             }
         }
 
-        if (Player.m_localPlayer != null && (sender == 0 || Player.m_localPlayer.GetPlayerID() == sender))
+        if (Player.m_localPlayer != null && Player.m_localPlayer.GetPlayerID() == playerId)
         {
             return Player.m_localPlayer;
         }
 
         return null;
+    }
+
+    private static bool IsPeerConnected(long peerId)
+    {
+        if (peerId <= 0 || ZNet.instance == null)
+        {
+            return true;
+        }
+
+        var getPeerMethod = typeof(ZNet).GetMethod("GetPeer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(long) }, null);
+        if (getPeerMethod != null)
+        {
+            var peer = getPeerMethod.Invoke(ZNet.instance, new object[] { peerId });
+            if (peer != null)
+            {
+                return true;
+            }
+        }
+
+        var peersField = typeof(ZNet).GetField("m_peers", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (peersField?.GetValue(ZNet.instance) is System.Collections.IEnumerable peers)
+        {
+            foreach (var peer in peers)
+            {
+                if (peer == null)
+                {
+                    continue;
+                }
+
+                var uidField = peer.GetType().GetField("m_uid", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (uidField?.GetValue(peer) is long uid && uid == peerId)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static string BuildContainerUid(Container container)

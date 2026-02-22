@@ -22,6 +22,7 @@ public sealed class OpenSessionRequestDto
     public string RequestId { get; set; } = string.Empty;
     public string SessionId { get; set; } = string.Empty;
     public string TerminalUid { get; set; } = string.Empty;
+    public long PlayerId { get; set; }
     public float AnchorX { get; set; }
     public float AnchorY { get; set; }
     public float AnchorZ { get; set; }
@@ -42,6 +43,7 @@ public sealed class ReserveWithdrawRequestDto
     public string SessionId { get; set; } = string.Empty;
     public string OperationId { get; set; } = string.Empty;
     public string TerminalUid { get; set; } = string.Empty;
+    public long PlayerId { get; set; }
     public long ExpectedRevision { get; set; }
     public ItemKey Key { get; set; }
     public int Amount { get; set; }
@@ -74,6 +76,7 @@ public sealed class CancelReservationRequestDto
     public string SessionId { get; set; } = string.Empty;
     public string OperationId { get; set; } = string.Empty;
     public string TerminalUid { get; set; } = string.Empty;
+    public long PlayerId { get; set; }
     public string TokenId { get; set; } = string.Empty;
     public int Amount { get; set; }
 }
@@ -84,6 +87,7 @@ public sealed class DepositRequestDto
     public string SessionId { get; set; } = string.Empty;
     public string OperationId { get; set; } = string.Empty;
     public string TerminalUid { get; set; } = string.Empty;
+    public long PlayerId { get; set; }
     public long ExpectedRevision { get; set; }
     public ItemKey Key { get; set; }
     public int Amount { get; set; }
@@ -106,6 +110,7 @@ public sealed class CloseSessionRequestDto
     public string RequestId { get; set; } = string.Empty;
     public string SessionId { get; set; } = string.Empty;
     public string TerminalUid { get; set; } = string.Empty;
+    public long PlayerId { get; set; }
 }
 
 public sealed class SessionDeltaDto

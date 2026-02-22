@@ -14,6 +14,7 @@ public static class TerminalCodec
             pkg.Write(dto.RequestId ?? string.Empty);
             pkg.Write(dto.SessionId ?? string.Empty);
             pkg.Write(dto.TerminalUid ?? string.Empty);
+            pkg.Write(dto.PlayerId);
             pkg.Write(dto.AnchorX);
             pkg.Write(dto.AnchorY);
             pkg.Write(dto.AnchorZ);
@@ -29,6 +30,7 @@ public static class TerminalCodec
             dto.RequestId = pkg.ReadString();
             dto.SessionId = pkg.ReadString();
             dto.TerminalUid = pkg.ReadString();
+            dto.PlayerId = pkg.ReadLong();
             dto.AnchorX = pkg.ReadSingle();
             dto.AnchorY = pkg.ReadSingle();
             dto.AnchorZ = pkg.ReadSingle();
@@ -69,6 +71,7 @@ public static class TerminalCodec
             pkg.Write(dto.SessionId ?? string.Empty);
             pkg.Write(dto.OperationId ?? string.Empty);
             pkg.Write(dto.TerminalUid ?? string.Empty);
+            pkg.Write(dto.PlayerId);
             pkg.Write(dto.ExpectedRevision);
             WriteItemKey(pkg, dto.Key);
             pkg.Write(dto.Amount);
@@ -84,6 +87,7 @@ public static class TerminalCodec
             dto.SessionId = pkg.ReadString();
             dto.OperationId = pkg.ReadString();
             dto.TerminalUid = pkg.ReadString();
+            dto.PlayerId = pkg.ReadLong();
             dto.ExpectedRevision = pkg.ReadLong();
             dto.Key = ReadItemKey(pkg);
             dto.Amount = pkg.ReadInt();
@@ -157,6 +161,7 @@ public static class TerminalCodec
             pkg.Write(dto.SessionId ?? string.Empty);
             pkg.Write(dto.OperationId ?? string.Empty);
             pkg.Write(dto.TerminalUid ?? string.Empty);
+            pkg.Write(dto.PlayerId);
             pkg.Write(dto.TokenId ?? string.Empty);
             pkg.Write(dto.Amount);
         });
@@ -171,6 +176,7 @@ public static class TerminalCodec
             dto.SessionId = pkg.ReadString();
             dto.OperationId = pkg.ReadString();
             dto.TerminalUid = pkg.ReadString();
+            dto.PlayerId = pkg.ReadLong();
             dto.TokenId = pkg.ReadString();
             dto.Amount = pkg.ReadInt();
         });
@@ -185,6 +191,7 @@ public static class TerminalCodec
             pkg.Write(dto.SessionId ?? string.Empty);
             pkg.Write(dto.OperationId ?? string.Empty);
             pkg.Write(dto.TerminalUid ?? string.Empty);
+            pkg.Write(dto.PlayerId);
             pkg.Write(dto.ExpectedRevision);
             WriteItemKey(pkg, dto.Key);
             pkg.Write(dto.Amount);
@@ -200,6 +207,7 @@ public static class TerminalCodec
             dto.SessionId = pkg.ReadString();
             dto.OperationId = pkg.ReadString();
             dto.TerminalUid = pkg.ReadString();
+            dto.PlayerId = pkg.ReadLong();
             dto.ExpectedRevision = pkg.ReadLong();
             dto.Key = ReadItemKey(pkg);
             dto.Amount = pkg.ReadInt();
@@ -246,6 +254,7 @@ public static class TerminalCodec
             pkg.Write(dto.RequestId ?? string.Empty);
             pkg.Write(dto.SessionId ?? string.Empty);
             pkg.Write(dto.TerminalUid ?? string.Empty);
+            pkg.Write(dto.PlayerId);
         });
     }
 
@@ -257,6 +266,7 @@ public static class TerminalCodec
             dto.RequestId = pkg.ReadString();
             dto.SessionId = pkg.ReadString();
             dto.TerminalUid = pkg.ReadString();
+            dto.PlayerId = pkg.ReadLong();
         });
         return dto;
     }

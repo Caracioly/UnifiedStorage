@@ -30,6 +30,7 @@ public sealed class UnifiedTerminalSessionService
     private readonly Dictionary<ItemKey, ItemDrop.ItemData> _prototypes = new();
     private readonly Dictionary<string, int> _originalStackSizes = new();
     private readonly List<PendingReservation> _pendingReservations = new();
+    private readonly List<PendingDeposit> _pendingDeposits = new();
 
     private Container? _terminal;
     private Player? _player;
@@ -124,6 +125,7 @@ public sealed class UnifiedTerminalSessionService
         _chestCount = 0;
         _nextSnapshotRetryAt = Time.unscaledTime;
         _pendingReservations.Clear();
+        _pendingDeposits.Clear();
         _authoritativeTotals.Clear();
         _displayedTotals.Clear();
         _prototypes.Clear();
@@ -240,7 +242,8 @@ public sealed class UnifiedTerminalSessionService
             {
                 RequestId = Guid.NewGuid().ToString("N"),
                 SessionId = _sessionId,
-                TerminalUid = _terminalUid
+                TerminalUid = _terminalUid,
+                PlayerId = ResolveLocalPlayerId()
             });
         }
 
@@ -266,6 +269,7 @@ public sealed class UnifiedTerminalSessionService
         _nextTrackedChestRefreshAt = 0f;
         _nextSnapshotRetryAt = 0f;
         _pendingReservations.Clear();
+        _pendingDeposits.Clear();
         _authoritativeTotals.Clear();
         _displayedTotals.Clear();
         _prototypes.Clear();
@@ -347,6 +351,10 @@ public sealed class UnifiedTerminalSessionService
             RemovePendingToken(result.TokenId);
             RequestSessionSnapshot();
         }
+        else if (string.Equals(result.OperationType, "deposit", StringComparison.Ordinal))
+        {
+            HandleDepositApplyResult(result);
+        }
 
         ApplySnapshot(result.Snapshot);
     }
@@ -359,11 +367,6 @@ public sealed class UnifiedTerminalSessionService
         }
 
         if (!string.Equals(delta.TerminalUid, _terminalUid, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        if (!string.IsNullOrWhiteSpace(delta.SessionId) && !string.Equals(delta.SessionId, _sessionId, StringComparison.Ordinal))
         {
             return;
         }
@@ -384,12 +387,6 @@ public sealed class UnifiedTerminalSessionService
         }
 
         if (!string.Equals(snapshot.TerminalUid, _terminalUid, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(snapshot.SessionId) && !string.IsNullOrWhiteSpace(_sessionId)
-            && !string.Equals(snapshot.SessionId, _sessionId, StringComparison.Ordinal))
         {
             return false;
         }
@@ -476,6 +473,7 @@ public sealed class UnifiedTerminalSessionService
             SessionId = _sessionId,
             OperationId = Guid.NewGuid().ToString("N"),
             TerminalUid = _terminalUid,
+            PlayerId = ResolveLocalPlayerId(),
             ExpectedRevision = _revision,
             Key = key,
             Amount = amount
@@ -509,6 +507,7 @@ public sealed class UnifiedTerminalSessionService
                 SessionId = _sessionId,
                 OperationId = Guid.NewGuid().ToString("N"),
                 TerminalUid = _terminalUid,
+                PlayerId = ResolveLocalPlayerId(),
                 TokenId = pending.TokenId,
                 Amount = cancelAmount
             });
@@ -526,12 +525,21 @@ public sealed class UnifiedTerminalSessionService
             return;
         }
 
+        var requestId = Guid.NewGuid().ToString("N");
+        _pendingDeposits.Add(new PendingDeposit
+        {
+            RequestId = requestId,
+            Key = key,
+            Amount = remaining
+        });
+
         _routes.RequestDeposit(new DepositRequestDto
         {
-            RequestId = Guid.NewGuid().ToString("N"),
+            RequestId = requestId,
             SessionId = _sessionId,
             OperationId = Guid.NewGuid().ToString("N"),
             TerminalUid = _terminalUid,
+            PlayerId = ResolveLocalPlayerId(),
             ExpectedRevision = _revision,
             Key = key,
             Amount = remaining
@@ -587,6 +595,7 @@ public sealed class UnifiedTerminalSessionService
             RequestId = Guid.NewGuid().ToString("N"),
             SessionId = _sessionId,
             TerminalUid = _terminalUid,
+            PlayerId = ResolveLocalPlayerId(),
             AnchorX = _terminal.transform.position.x,
             AnchorY = _terminal.transform.position.y,
             AnchorZ = _terminal.transform.position.z,
@@ -802,12 +811,192 @@ public sealed class UnifiedTerminalSessionService
         _pendingReservations.RemoveAll(r => string.Equals(r.TokenId, tokenId, StringComparison.Ordinal));
     }
 
+    private void HandleDepositApplyResult(ApplyResultDto result)
+    {
+        var pending = _pendingDeposits.FirstOrDefault(p => string.Equals(p.RequestId, result.RequestId, StringComparison.Ordinal));
+        if (pending == null)
+        {
+            return;
+        }
+
+        _pendingDeposits.Remove(pending);
+
+        var toRestore = 0;
+        if (!result.Success && ShouldRestoreFailedDeposit(result.Reason))
+        {
+            toRestore = pending.Amount;
+        }
+
+        if (toRestore <= 0)
+        {
+            return;
+        }
+
+        if (IsLocalServer())
+        {
+            return;
+        }
+
+        RestoreToLocalPlayerInventory(pending.Key, toRestore);
+    }
+
+    private static bool ShouldRestoreFailedDeposit(string reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return false;
+        }
+
+        return string.Equals(reason, "Conflict", StringComparison.Ordinal)
+               || string.Equals(reason, "Player not found", StringComparison.Ordinal)
+               || string.Equals(reason, "Player has no matching item", StringComparison.Ordinal)
+               || string.Equals(reason, "Session not found", StringComparison.Ordinal);
+    }
+
     private void MarkPendingCommitAsRetryable(string tokenId)
     {
         foreach (var pending in _pendingReservations.Where(r => string.Equals(r.TokenId, tokenId, StringComparison.Ordinal)))
         {
             pending.CommitRequested = false;
         }
+    }
+
+    private static bool IsLocalServer()
+    {
+        if (ZNet.instance == null)
+        {
+            return true;
+        }
+
+        var isServerMethod = typeof(ZNet).GetMethod("IsServer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (isServerMethod != null && isServerMethod.Invoke(ZNet.instance, null) is bool isServer)
+        {
+            return isServer;
+        }
+
+        var isServerField = typeof(ZNet).GetField("m_isServer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return isServerField?.GetValue(ZNet.instance) as bool? ?? true;
+    }
+
+    private void RestoreToLocalPlayerInventory(ItemKey key, int amount)
+    {
+        if (amount <= 0 || _player == null)
+        {
+            return;
+        }
+
+        var remaining = amount;
+        var inventory = _player.GetInventory();
+        while (remaining > 0)
+        {
+            var stackSize = Math.Min(999, remaining);
+            var stack = CreateItemStack(key, stackSize);
+            if (stack == null)
+            {
+                break;
+            }
+
+            if (inventory.AddItem(stack))
+            {
+                remaining -= stackSize;
+                continue;
+            }
+
+            var moved = false;
+            for (var split = stackSize / 2; split >= 1; split /= 2)
+            {
+                var partial = CreateItemStack(key, split);
+                if (partial == null || !inventory.AddItem(partial))
+                {
+                    continue;
+                }
+
+                remaining -= split;
+                moved = true;
+                break;
+            }
+
+            if (!moved)
+            {
+                break;
+            }
+        }
+
+        if (remaining > 0)
+        {
+            DropNearPlayer(key, remaining);
+        }
+    }
+
+    private void DropNearPlayer(ItemKey key, int amount)
+    {
+        if (_player == null || amount <= 0)
+        {
+            return;
+        }
+
+        var remaining = amount;
+        while (remaining > 0)
+        {
+            var stackAmount = Math.Min(999, remaining);
+            var stack = CreateItemStack(key, stackAmount);
+            if (stack == null)
+            {
+                break;
+            }
+
+            var pos = _player.transform.position + _player.transform.forward + Vector3.up;
+            if (!TryDropItem(stack, stackAmount, pos, Quaternion.identity))
+            {
+                break;
+            }
+
+            remaining -= stackAmount;
+        }
+    }
+
+    private static bool TryDropItem(ItemDrop.ItemData item, int amount, Vector3 position, Quaternion rotation)
+    {
+        var methods = typeof(ItemDrop).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+            .Where(m => string.Equals(m.Name, "DropItem", StringComparison.Ordinal))
+            .ToList();
+
+        foreach (var method in methods)
+        {
+            var parameters = method.GetParameters();
+            try
+            {
+                if (parameters.Length == 4
+                    && parameters[0].ParameterType == typeof(ItemDrop.ItemData)
+                    && parameters[1].ParameterType == typeof(int)
+                    && parameters[2].ParameterType == typeof(Vector3)
+                    && parameters[3].ParameterType == typeof(Quaternion))
+                {
+                    method.Invoke(null, new object[] { item, amount, position, rotation });
+                    return true;
+                }
+
+                if (parameters.Length == 3
+                    && parameters[0].ParameterType == typeof(ItemDrop.ItemData)
+                    && parameters[1].ParameterType == typeof(int)
+                    && parameters[2].ParameterType == typeof(Vector3))
+                {
+                    method.Invoke(null, new object[] { item, amount, position });
+                    return true;
+                }
+            }
+            catch
+            {
+                // Try next signature.
+            }
+        }
+
+        return false;
+    }
+
+    private long ResolveLocalPlayerId()
+    {
+        return _player != null ? _player.GetPlayerID() : 0L;
     }
 
     private ItemDrop.ItemData? CreateItemStack(ItemKey key, int amount)
@@ -998,5 +1187,12 @@ public sealed class UnifiedTerminalSessionService
         public int ReservedAmount { get; set; }
         public float ExpiresAt { get; set; }
         public bool CommitRequested { get; set; }
+    }
+
+    private sealed class PendingDeposit
+    {
+        public string RequestId { get; set; } = string.Empty;
+        public ItemKey Key { get; set; }
+        public int Amount { get; set; }
     }
 }
