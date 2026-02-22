@@ -24,6 +24,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     private const float FooterPanelBottomOffset = -62f;
     private const float FooterPanelHeight = 44f;
     private const float GridTopReserve = 124f;
+    private const float WorldChangeRefreshMinInterval = 0.2f;
 
     private static readonly System.Reflection.FieldInfo? ContainerField = AccessTools.Field(typeof(InventoryGui), "m_container");
     private static readonly System.Reflection.FieldInfo? ContainerGridField = AccessTools.Field(typeof(InventoryGui), "m_containerGrid");
@@ -55,6 +56,8 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     private bool _nativeBuilt;
     private string _lastSearch = string.Empty;
     private int _lastUiRevision = -1;
+    private bool _trackedInventoryDirty;
+    private float _nextAllowedWorldRefreshAt;
 
     private void Awake()
     {
@@ -76,6 +79,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(InventoryGuiOnTakeAllPatch));
         _harmony.PatchAll(typeof(InventoryGuiOnStackAllPatch));
         _harmony.PatchAll(typeof(InventoryGuiOnDropOutsidePatch));
+        _harmony.PatchAll(typeof(InventoryChangedPatch));
         _harmony.PatchAll(typeof(ZInputGetButtonPatch));
         _harmony.PatchAll(typeof(ZInputGetButtonDownPatch));
         _harmony.PatchAll(typeof(ZInputGetButtonUpPatch));
@@ -89,6 +93,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     private void Update()
     {
         _session?.Tick();
+        TryProcessWorldChangeRefresh();
     }
 
     private void OnDestroy()
@@ -129,6 +134,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     {
         _blockGameInput = false;
         _lastSearch = string.Empty;
+        _trackedInventoryDirty = false;
         if (_searchInputField != null)
         {
             _searchInputField.text = string.Empty;
@@ -179,6 +185,21 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 
     internal static bool ShouldBlockGameInput() => _blockGameInput;
     internal bool IsUnifiedSessionActive() => _session != null && _session.IsActive;
+
+    internal void OnTrackedInventoryChanged(Inventory inventory)
+    {
+        if (_session == null || !_session.IsActive || inventory == null)
+        {
+            return;
+        }
+
+        if (!_session.IsTrackedInventory(inventory))
+        {
+            return;
+        }
+
+        _trackedInventoryDirty = true;
+    }
 
     private void EnsureNativeUi(InventoryGui gui)
     {
@@ -518,6 +539,35 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         {
             _nativeUiRoot.gameObject.SetActive(visible);
         }
+    }
+
+    private void TryProcessWorldChangeRefresh()
+    {
+        if (!_trackedInventoryDirty || _session == null || !_session.IsActive || InventoryGui.instance == null)
+        {
+            return;
+        }
+
+        if (!InventoryGui.IsVisible() || !InventoryGui.instance.IsContainerOpen())
+        {
+            return;
+        }
+
+        if (Time.unscaledTime < _nextAllowedWorldRefreshAt)
+        {
+            return;
+        }
+
+        if (IsDragInProgress(InventoryGui.instance))
+        {
+            return;
+        }
+
+        _nextAllowedWorldRefreshAt = Time.unscaledTime + WorldChangeRefreshMinInterval;
+        _trackedInventoryDirty = false;
+        _session.RefreshFromWorldChange();
+        UpdateMetaText();
+        RefreshContainerGrid(InventoryGui.instance);
     }
 
     private static void SetTakeAllButtonEnabled(InventoryGui gui, bool enabled)

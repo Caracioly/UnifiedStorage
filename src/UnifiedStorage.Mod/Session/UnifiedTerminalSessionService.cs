@@ -27,6 +27,7 @@ public sealed class UnifiedTerminalSessionService
     private Player? _player;
     private List<ChestHandle> _chests = new();
     private string _searchQuery = string.Empty;
+    private float _scanRadius;
     private int _slotsTotalPhysical;
     private int _chestCount;
     private int _originalInventoryWidth;
@@ -52,6 +53,30 @@ public sealed class UnifiedTerminalSessionService
     public int ContentRows => _contentRows;
     public int UiRevision => _uiRevision;
 
+    public bool IsTrackedInventory(Inventory inventory)
+    {
+        if (!IsActive || inventory == null || _terminal == null)
+        {
+            return false;
+        }
+
+        var terminalInventory = _terminal.GetInventory();
+        if (ReferenceEquals(inventory, terminalInventory))
+        {
+            return true;
+        }
+
+        foreach (var chest in _chests)
+        {
+            if (ReferenceEquals(inventory, chest.Container.GetInventory()))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public bool HandleTerminalInteract(Container container, Player player, bool hold)
     {
         if (hold || !UnifiedChestTerminalMarker.IsTerminalContainer(container))
@@ -76,42 +101,9 @@ public sealed class UnifiedTerminalSessionService
         _visibleRows = Math.Max(1, _originalInventoryHeight + 2);
         _uiRevision++;
 
-        var radius = _config.TerminalRangeOverride.Value > 0 ? _config.TerminalRangeOverride.Value : _config.ScanRadius.Value;
-        _chests = _scanner.GetNearbyContainers(terminal.transform.position, radius, terminal, onlyVanillaChests: true).ToList();
-        _chestCount = _chests.Count;
-        _slotsTotalPhysical = _chests.Sum(chest => GetInventoryTotalSlots(chest.Container.GetInventory()));
-
-        _baseTotals.Clear();
-        _workingTotals.Clear();
-        _displayedTotals.Clear();
-        _prototypes.Clear();
-
-        foreach (var chest in _chests)
-        {
-            var inv = chest.Container.GetInventory();
-            if (inv == null || (_config.RequireAccessCheck.Value && !CanAccess(chest.Container, player)))
-            {
-                continue;
-            }
-
-            foreach (var item in inv.GetAllItems())
-            {
-                if (item?.m_dropPrefab == null || item.m_stack <= 0)
-                {
-                    continue;
-                }
-
-                var key = new ItemKey(item.m_dropPrefab.name, item.m_quality, item.m_variant);
-                _baseTotals[key] = _baseTotals.TryGetValue(key, out var existing) ? existing + item.m_stack : item.m_stack;
-                _workingTotals[key] = _baseTotals[key];
-                if (!_prototypes.ContainsKey(key))
-                {
-                    _prototypes[key] = item.Clone();
-                }
-
-                EnsureStack999(item);
-            }
-        }
+        _scanRadius = _config.TerminalRangeOverride.Value > 0 ? _config.TerminalRangeOverride.Value : _config.ScanRadius.Value;
+        RefreshChestHandles();
+        RebuildTotalsFromPhysicalStorage();
 
         RefreshTerminalInventoryFromWorking();
         _logger.LogDebug($"Unified terminal session started. Chests={_chestCount}, Slots={_slotsTotalPhysical}");
@@ -160,6 +152,24 @@ public sealed class UnifiedTerminalSessionService
         }
 
         SyncDisplayedDeltaToWorking();
+        CommitDeltasToPhysicalStorage();
+        RefreshChestHandles();
+        RebuildTotalsFromPhysicalStorage();
+        RefreshTerminalInventoryFromWorking();
+        _uiRevision++;
+    }
+
+    public void RefreshFromWorldChange()
+    {
+        if (!IsActive || _terminal == null)
+        {
+            return;
+        }
+
+        SyncDisplayedDeltaToWorking();
+        CommitDeltasToPhysicalStorage();
+        RefreshChestHandles();
+        RebuildTotalsFromPhysicalStorage();
         RefreshTerminalInventoryFromWorking();
         _uiRevision++;
     }
@@ -194,7 +204,57 @@ public sealed class UnifiedTerminalSessionService
         _originalContainerName = null;
         _visibleRows = 0;
         _contentRows = 0;
+        _scanRadius = 0f;
         _uiRevision++;
+    }
+
+    private void RefreshChestHandles()
+    {
+        if (_terminal == null)
+        {
+            _chests.Clear();
+            _chestCount = 0;
+            _slotsTotalPhysical = 0;
+            return;
+        }
+
+        _chests = _scanner.GetNearbyContainers(_terminal.transform.position, _scanRadius, _terminal, onlyVanillaChests: true).ToList();
+        _chestCount = _chests.Count;
+        _slotsTotalPhysical = _chests.Sum(chest => GetInventoryTotalSlots(chest.Container.GetInventory()));
+    }
+
+    private void RebuildTotalsFromPhysicalStorage()
+    {
+        _baseTotals.Clear();
+        _workingTotals.Clear();
+        _displayedTotals.Clear();
+
+        foreach (var chest in _chests)
+        {
+            var inv = chest.Container.GetInventory();
+            if (inv == null)
+            {
+                continue;
+            }
+
+            foreach (var item in inv.GetAllItems())
+            {
+                if (item?.m_dropPrefab == null || item.m_stack <= 0)
+                {
+                    continue;
+                }
+
+                var key = new ItemKey(item.m_dropPrefab.name, item.m_quality, item.m_variant);
+                _baseTotals[key] = _baseTotals.TryGetValue(key, out var existing) ? existing + item.m_stack : item.m_stack;
+                _workingTotals[key] = _baseTotals[key];
+                if (!_prototypes.ContainsKey(key))
+                {
+                    _prototypes[key] = item.Clone();
+                }
+
+                EnsureStack999(item);
+            }
+        }
     }
 
     private void RefreshTerminalInventoryFromWorking()
@@ -328,16 +388,26 @@ public sealed class UnifiedTerminalSessionService
 
             if (delta < 0)
             {
-                RemoveFromChests(key, -delta);
+                var expectedRemoved = -delta;
+                var actualRemoved = RemoveFromChests(key, expectedRemoved);
+                if (actualRemoved < expectedRemoved)
+                {
+                    RemoveFromPlayerInventory(key, expectedRemoved - actualRemoved);
+                }
             }
             else
             {
-                AddToChests(key, delta);
+                var expectedStored = delta;
+                var actualStored = AddToChests(key, expectedStored);
+                if (actualStored < expectedStored)
+                {
+                    AddToPlayerInventory(key, expectedStored - actualStored);
+                }
             }
         }
     }
 
-    private void RemoveFromChests(ItemKey key, int amount)
+    private int RemoveFromChests(ItemKey key, int amount)
     {
         var remaining = amount;
         foreach (var chest in _chests.OrderBy(c => c.Distance).ThenBy(c => c.SourceId))
@@ -365,9 +435,11 @@ public sealed class UnifiedTerminalSessionService
                 remaining -= take;
             }
         }
+
+        return amount - remaining;
     }
 
-    private void AddToChests(ItemKey key, int amount)
+    private int AddToChests(ItemKey key, int amount)
     {
         var remaining = amount;
         foreach (var chest in _chests.OrderBy(c => c.Distance).ThenBy(c => c.SourceId))
@@ -393,6 +465,51 @@ public sealed class UnifiedTerminalSessionService
 
                 remaining -= stack.m_stack;
             }
+        }
+
+        return amount - remaining;
+    }
+
+    private void RemoveFromPlayerInventory(ItemKey key, int amount)
+    {
+        if (_player == null || amount <= 0)
+        {
+            return;
+        }
+
+        var remaining = amount;
+        var playerInventory = _player.GetInventory();
+        foreach (var item in playerInventory.GetAllItems().Where(i => i != null && MatchKey(i, key)).ToList())
+        {
+            if (remaining <= 0)
+            {
+                break;
+            }
+
+            var remove = Math.Min(remaining, item.m_stack);
+            playerInventory.RemoveItem(item, remove);
+            remaining -= remove;
+        }
+    }
+
+    private void AddToPlayerInventory(ItemKey key, int amount)
+    {
+        if (_player == null || amount <= 0)
+        {
+            return;
+        }
+
+        var remaining = amount;
+        var playerInventory = _player.GetInventory();
+        while (remaining > 0)
+        {
+            var stack = CreateItemStack(key, Math.Min(999, remaining));
+            if (stack == null || !playerInventory.AddItem(stack))
+            {
+                break;
+            }
+
+            remaining -= stack.m_stack;
         }
     }
 
