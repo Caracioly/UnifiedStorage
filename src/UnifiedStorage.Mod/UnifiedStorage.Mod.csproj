@@ -1,0 +1,81 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>UnifiedStorage</AssemblyName>
+    <RootNamespace>UnifiedStorage.Mod</RootNamespace>
+    <NoWarn>NU1701</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <ResolvedBepInExCoreDir Condition="'$(BEPINEX_CORE_DIR)' != ''">$(BEPINEX_CORE_DIR)</ResolvedBepInExCoreDir>
+    <ResolvedBepInExCoreDir Condition="'$(ResolvedBepInExCoreDir)' == '' and '$(VALHEIM_MANAGED_DIR)' != ''">$(VALHEIM_MANAGED_DIR)\..\..\BepInEx\core</ResolvedBepInExCoreDir>
+    <ResolvedJotunnDll Condition="'$(JOTUNN_DLL)' != ''">$(JOTUNN_DLL)</ResolvedJotunnDll>
+    <ResolvedJotunnDll Condition="'$(ResolvedJotunnDll)' == ''">C:\Users\andre\AppData\Roaming\r2modmanPlus-local\Valheim\profiles\trem novo\BepInEx\plugins\ValheimModding-Jotunn\Jotunn.dll</ResolvedJotunnDll>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\UnifiedStorage.Core\UnifiedStorage.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(VALHEIM_MANAGED_DIR)' != ''">
+    <Reference Include="BepInEx">
+      <HintPath>$(ResolvedBepInExCoreDir)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="HarmonyX">
+      <HintPath>$(ResolvedBepInExCoreDir)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\UnityEngine.AssetBundleModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_utils">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\assembly_utils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_valheim">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\assembly_valheim.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Jotunn">
+      <HintPath>$(ResolvedJotunnDll)</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
