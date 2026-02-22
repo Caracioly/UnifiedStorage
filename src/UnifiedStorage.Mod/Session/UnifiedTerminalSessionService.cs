@@ -7,6 +7,7 @@ using UnifiedStorage.Core;
 using UnifiedStorage.Mod.Config;
 using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Models;
+using UnifiedStorage.Mod.Network;
 using UnifiedStorage.Mod.Pieces;
 using UnityEngine;
 
@@ -15,43 +16,63 @@ namespace UnifiedStorage.Mod.Session;
 public sealed class UnifiedTerminalSessionService
 {
     private const float CloseGraceSeconds = 0.35f;
+    private const float ReservationTtlSeconds = 3f;
+    private const float TrackedChestRefreshSeconds = 1f;
+    private static readonly FieldInfo? DragItemField = typeof(InventoryGui).GetField("m_dragItem", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
     private readonly StorageConfig _config;
     private readonly IContainerScanner _scanner;
+    private readonly TerminalRpcRoutes _routes;
     private readonly ManualLogSource _logger;
 
-    private readonly Dictionary<ItemKey, int> _baseTotals = new();
-    private readonly Dictionary<ItemKey, int> _workingTotals = new();
+    private readonly Dictionary<ItemKey, int> _authoritativeTotals = new();
     private readonly Dictionary<ItemKey, int> _displayedTotals = new();
     private readonly Dictionary<ItemKey, ItemDrop.ItemData> _prototypes = new();
     private readonly Dictionary<string, int> _originalStackSizes = new();
+    private readonly List<PendingReservation> _pendingReservations = new();
 
     private Container? _terminal;
     private Player? _player;
-    private List<ChestHandle> _chests = new();
+    private List<ChestHandle> _trackedChests = new();
+    private string _sessionId = string.Empty;
+    private string _terminalUid = string.Empty;
     private string _searchQuery = string.Empty;
     private float _scanRadius;
-    private string _terminalUid = string.Empty;
     private float _pendingCloseSince = -1f;
+    private float _nextTrackedChestRefreshAt;
+    private float _nextSnapshotRetryAt;
+    private bool _isApplyingProjection;
     private int _slotsTotalPhysical;
     private int _chestCount;
+    private long _revision;
     private int _originalInventoryWidth;
     private int _originalInventoryHeight;
     private int _visibleRows;
     private int _contentRows;
     private int _uiRevision;
 
-    public UnifiedTerminalSessionService(StorageConfig config, IContainerScanner scanner, ManualLogSource logger)
+    public UnifiedTerminalSessionService(
+        StorageConfig config,
+        IContainerScanner scanner,
+        TerminalRpcRoutes routes,
+        ManualLogSource logger)
     {
         _config = config;
         _scanner = scanner;
+        _routes = routes;
         _logger = logger;
+
+        _routes.SessionSnapshotReceived += OnSessionSnapshotReceived;
+        _routes.ReserveResultReceived += OnReserveResultReceived;
+        _routes.ApplyResultReceived += OnApplyResultReceived;
+        _routes.SessionDeltaReceived += OnSessionDeltaReceived;
     }
 
     public bool IsActive => _terminal != null && _player != null;
+    public bool IsApplyingProjection => _isApplyingProjection;
     public int SlotsTotalPhysical => _slotsTotalPhysical;
     public int ChestsInRange => _chestCount;
-    public int SlotsUsedVirtual => _workingTotals.Where(kv => kv.Value > 0).Sum(kv => (int)Math.Ceiling(kv.Value / 999f));
+    public int SlotsUsedVirtual => _authoritativeTotals.Where(kv => kv.Value > 0).Sum(kv => (int)Math.Ceiling(kv.Value / 999f));
     public string SearchQuery => _searchQuery;
     public int VisibleRows => _visibleRows;
     public int ContentRows => _contentRows;
@@ -67,18 +88,10 @@ public sealed class UnifiedTerminalSessionService
         var terminalInventory = _terminal.GetInventory();
         if (ReferenceEquals(inventory, terminalInventory))
         {
-            return true;
+            return false;
         }
 
-        foreach (var chest in _chests)
-        {
-            if (ReferenceEquals(inventory, chest.Container.GetInventory()))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return _trackedChests.Any(chest => ReferenceEquals(inventory, chest.Container.GetInventory()));
     }
 
     public bool HandleTerminalInteract(Container container, Player player, bool hold)
@@ -100,18 +113,24 @@ public sealed class UnifiedTerminalSessionService
         _terminal = terminal;
         _player = player;
         _searchQuery = string.Empty;
+        _sessionId = Guid.NewGuid().ToString("N");
         _terminalUid = BuildContainerUid(terminal);
         _pendingCloseSince = -1f;
+        _scanRadius = _config.TerminalRangeOverride.Value > 0 ? _config.TerminalRangeOverride.Value : _config.ScanRadius.Value;
         CaptureOriginalInventorySize(terminal.GetInventory());
         _visibleRows = Math.Max(1, _originalInventoryHeight + 2);
+        _revision = 0;
+        _slotsTotalPhysical = 0;
+        _chestCount = 0;
+        _nextSnapshotRetryAt = Time.unscaledTime;
+        _pendingReservations.Clear();
+        _authoritativeTotals.Clear();
+        _displayedTotals.Clear();
+        _prototypes.Clear();
+        RefreshTrackedChestHandles();
+        RefreshTerminalInventoryFromAuthoritative();
+        RequestSessionSnapshot();
         _uiRevision++;
-
-        _scanRadius = _config.TerminalRangeOverride.Value > 0 ? _config.TerminalRangeOverride.Value : _config.ScanRadius.Value;
-        RefreshChestHandles();
-        RebuildTotalsFromPhysicalStorage();
-
-        RefreshTerminalInventoryFromWorking();
-        _logger.LogDebug($"Unified terminal session started. Chests={_chestCount}, Slots={_slotsTotalPhysical}");
     }
 
     public void Tick()
@@ -133,12 +152,27 @@ public sealed class UnifiedTerminalSessionService
             {
                 EndSession();
             }
+
             return;
         }
 
         _pendingCloseSince = -1f;
+        if (Time.unscaledTime >= _nextTrackedChestRefreshAt)
+        {
+            RefreshTrackedChestHandles();
+        }
 
-        // Intentionally no per-frame sync to avoid heavy inventory rebuilds.
+        if (_revision == 0 && Time.unscaledTime >= _nextSnapshotRetryAt)
+        {
+            RequestSessionSnapshot();
+            _nextSnapshotRetryAt = Time.unscaledTime + 0.5f;
+        }
+
+        ExpireLocalReservations();
+        if (!IsDragInProgress())
+        {
+            CommitPendingReservations();
+        }
     }
 
     public void SetSearchQuery(string query)
@@ -154,9 +188,8 @@ public sealed class UnifiedTerminalSessionService
             return;
         }
 
-        SyncDisplayedDeltaToWorking();
         _searchQuery = normalized;
-        RefreshTerminalInventoryFromWorking();
+        RefreshTerminalInventoryFromAuthoritative();
         _uiRevision++;
     }
 
@@ -166,19 +199,21 @@ public sealed class UnifiedTerminalSessionService
         {
             return;
         }
-        
+
         if (!IsSessionTerminal(_terminal))
         {
             EndSession();
             return;
         }
 
-        SyncDisplayedDeltaToWorking();
-        CommitDeltasToPhysicalStorage();
-        RefreshChestHandles();
-        RebuildTotalsFromPhysicalStorage();
-        RefreshTerminalInventoryFromWorking();
-        _uiRevision++;
+        var currentDisplayed = CaptureCurrentDisplayedTotals();
+        ApplyDisplayedDeltaAsOperations(currentDisplayed);
+        ReplaceDisplayedTotals(currentDisplayed);
+
+        if (!IsDragInProgress())
+        {
+            CommitPendingReservations();
+        }
     }
 
     public void RefreshFromWorldChange()
@@ -187,77 +222,501 @@ public sealed class UnifiedTerminalSessionService
         {
             return;
         }
-        
+
         if (!IsSessionTerminal(_terminal))
         {
             EndSession();
             return;
         }
 
-        SyncDisplayedDeltaToWorking();
-        CommitDeltasToPhysicalStorage();
-        RefreshChestHandles();
-        RebuildTotalsFromPhysicalStorage();
-        RefreshTerminalInventoryFromWorking();
-        _uiRevision++;
+        RequestSessionSnapshot();
     }
 
     public void EndSession()
     {
+        if (_terminal != null && !string.IsNullOrWhiteSpace(_terminalUid))
+        {
+            _routes.RequestCloseSession(new CloseSessionRequestDto
+            {
+                RequestId = Guid.NewGuid().ToString("N"),
+                SessionId = _sessionId,
+                TerminalUid = _terminalUid
+            });
+        }
+
         if (_terminal == null || _player == null)
         {
             RestoreStackSizes();
             return;
         }
 
-        SyncDisplayedDeltaToWorking();
-        CommitDeltasToPhysicalStorage();
         ForceReleaseContainerUse(_terminal);
         ClearInventory(_terminal.GetInventory());
         RestoreTerminalInventorySize(_terminal.GetInventory());
-
         RestoreStackSizes();
 
         _terminal = null;
         _player = null;
-        _chests.Clear();
+        _trackedChests.Clear();
+        _sessionId = string.Empty;
+        _terminalUid = string.Empty;
         _searchQuery = string.Empty;
-        _baseTotals.Clear();
-        _workingTotals.Clear();
+        _scanRadius = 0f;
+        _pendingCloseSince = -1f;
+        _nextTrackedChestRefreshAt = 0f;
+        _nextSnapshotRetryAt = 0f;
+        _pendingReservations.Clear();
+        _authoritativeTotals.Clear();
         _displayedTotals.Clear();
         _prototypes.Clear();
-        _terminalUid = string.Empty;
-        _pendingCloseSince = -1f;
+        _slotsTotalPhysical = 0;
+        _chestCount = 0;
+        _revision = 0;
         _visibleRows = 0;
         _contentRows = 0;
-        _scanRadius = 0f;
         _uiRevision++;
     }
 
-    private void RefreshChestHandles()
+    private void OnSessionSnapshotReceived(OpenSessionResponseDto response)
     {
-        if (_terminal == null)
+        if (!IsActive)
         {
-            _chests.Clear();
-            _chestCount = 0;
-            _slotsTotalPhysical = 0;
             return;
         }
 
-        _chests = _scanner.GetNearbyContainers(_terminal.transform.position, _scanRadius, _terminal, onlyVanillaChests: true).ToList();
-        _chestCount = _chests.Count;
-        _slotsTotalPhysical = _chests.Sum(chest => GetInventoryTotalSlots(chest.Container.GetInventory()));
+        if (!response.Success)
+        {
+            if (!string.IsNullOrWhiteSpace(response.Reason))
+            {
+                _logger.LogDebug($"OpenSession rejected: {response.Reason}");
+            }
+
+            return;
+        }
+
+        if (!CanApplySnapshot(response.Snapshot))
+        {
+            return;
+        }
+
+        ApplySnapshot(response.Snapshot);
     }
 
-    private bool IsSessionTerminal(Container container)
+    private void OnReserveResultReceived(ReserveWithdrawResultDto result)
     {
-        if (container == null || string.IsNullOrWhiteSpace(_terminalUid))
+        if (!IsActive || !CanApplySnapshot(result.Snapshot))
+        {
+            return;
+        }
+
+        if (result.Success && !string.IsNullOrWhiteSpace(result.TokenId) && result.ReservedAmount > 0)
+        {
+            _pendingReservations.Add(new PendingReservation
+            {
+                TokenId = result.TokenId,
+                Key = result.Key,
+                ReservedAmount = result.ReservedAmount,
+                ExpiresAt = Time.unscaledTime + ReservationTtlSeconds
+            });
+        }
+
+        ApplySnapshot(result.Snapshot);
+    }
+
+    private void OnApplyResultReceived(ApplyResultDto result)
+    {
+        if (!IsActive || !CanApplySnapshot(result.Snapshot))
+        {
+            return;
+        }
+
+        if (string.Equals(result.OperationType, "commit", StringComparison.Ordinal))
+        {
+            if (result.Success)
+            {
+                RemovePendingToken(result.TokenId);
+            }
+            else
+            {
+                MarkPendingCommitAsRetryable(result.TokenId);
+                RequestSessionSnapshot();
+            }
+        }
+        else if (string.Equals(result.OperationType, "cancel", StringComparison.Ordinal) && !result.Success)
+        {
+            RemovePendingToken(result.TokenId);
+            RequestSessionSnapshot();
+        }
+
+        ApplySnapshot(result.Snapshot);
+    }
+
+    private void OnSessionDeltaReceived(SessionDeltaDto delta)
+    {
+        if (!IsActive)
+        {
+            return;
+        }
+
+        if (!string.Equals(delta.TerminalUid, _terminalUid, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(delta.SessionId) && !string.Equals(delta.SessionId, _sessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (delta.Revision < _revision)
+        {
+            return;
+        }
+
+        ApplySnapshot(delta.Snapshot);
+    }
+
+    private bool CanApplySnapshot(SessionSnapshotDto snapshot)
+    {
+        if (!IsActive || _terminal == null)
         {
             return false;
         }
 
-        var uid = BuildContainerUid(container);
-        return string.Equals(uid, _terminalUid, StringComparison.Ordinal);
+        if (!string.Equals(snapshot.TerminalUid, _terminalUid, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.SessionId) && !string.IsNullOrWhiteSpace(_sessionId)
+            && !string.Equals(snapshot.SessionId, _sessionId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private void ApplySnapshot(SessionSnapshotDto snapshot)
+    {
+        if (!CanApplySnapshot(snapshot))
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.SessionId))
+        {
+            _sessionId = snapshot.SessionId;
+        }
+
+        _revision = snapshot.Revision;
+        _slotsTotalPhysical = snapshot.SlotsTotalPhysical;
+        _chestCount = snapshot.ChestCount;
+        _nextSnapshotRetryAt = Time.unscaledTime + 60f;
+
+        _authoritativeTotals.Clear();
+        _prototypes.Clear();
+        foreach (var item in snapshot.Items)
+        {
+            if (item.TotalAmount <= 0)
+            {
+                continue;
+            }
+
+            _authoritativeTotals[item.Key] = item.TotalAmount;
+            if (!_prototypes.ContainsKey(item.Key))
+            {
+                var prefab = ObjectDB.instance?.GetItemPrefab(item.Key.PrefabName);
+                var drop = prefab?.GetComponent<ItemDrop>();
+                if (drop?.m_itemData != null)
+                {
+                    var proto = drop.m_itemData.Clone();
+                    proto.m_quality = item.Key.Quality;
+                    proto.m_variant = item.Key.Variant;
+                    _prototypes[item.Key] = proto;
+                }
+            }
+        }
+
+        RefreshTrackedChestHandles();
+        RefreshTerminalInventoryFromAuthoritative();
+        _uiRevision++;
+    }
+
+    private void ApplyDisplayedDeltaAsOperations(Dictionary<ItemKey, int> currentDisplayed)
+    {
+        var keys = new HashSet<ItemKey>(_displayedTotals.Keys);
+        keys.UnionWith(currentDisplayed.Keys);
+        foreach (var key in keys)
+        {
+            var previous = _displayedTotals.TryGetValue(key, out var prev) ? prev : 0;
+            var current = currentDisplayed.TryGetValue(key, out var now) ? now : 0;
+            var delta = current - previous;
+            if (delta < 0)
+            {
+                RequestReserveWithdraw(key, -delta);
+            }
+            else if (delta > 0)
+            {
+                RequestCancelAndOrDeposit(key, delta);
+            }
+        }
+    }
+
+    private void RequestReserveWithdraw(ItemKey key, int amount)
+    {
+        if (amount <= 0)
+        {
+            return;
+        }
+
+        _routes.RequestReserveWithdraw(new ReserveWithdrawRequestDto
+        {
+            RequestId = Guid.NewGuid().ToString("N"),
+            SessionId = _sessionId,
+            OperationId = Guid.NewGuid().ToString("N"),
+            TerminalUid = _terminalUid,
+            ExpectedRevision = _revision,
+            Key = key,
+            Amount = amount
+        });
+    }
+
+    private void RequestCancelAndOrDeposit(ItemKey key, int amount)
+    {
+        if (amount <= 0)
+        {
+            return;
+        }
+
+        var remaining = amount;
+        foreach (var pending in _pendingReservations.Where(r => r.Key.Equals(key) && r.ReservedAmount > 0).ToList())
+        {
+            if (remaining <= 0)
+            {
+                break;
+            }
+
+            var cancelAmount = Math.Min(remaining, pending.ReservedAmount);
+            if (cancelAmount <= 0)
+            {
+                continue;
+            }
+
+            _routes.RequestCancelReservation(new CancelReservationRequestDto
+            {
+                RequestId = Guid.NewGuid().ToString("N"),
+                SessionId = _sessionId,
+                OperationId = Guid.NewGuid().ToString("N"),
+                TerminalUid = _terminalUid,
+                TokenId = pending.TokenId,
+                Amount = cancelAmount
+            });
+
+            pending.ReservedAmount -= cancelAmount;
+            remaining -= cancelAmount;
+            if (pending.ReservedAmount <= 0)
+            {
+                _pendingReservations.Remove(pending);
+            }
+        }
+
+        if (remaining <= 0)
+        {
+            return;
+        }
+
+        _routes.RequestDeposit(new DepositRequestDto
+        {
+            RequestId = Guid.NewGuid().ToString("N"),
+            SessionId = _sessionId,
+            OperationId = Guid.NewGuid().ToString("N"),
+            TerminalUid = _terminalUid,
+            ExpectedRevision = _revision,
+            Key = key,
+            Amount = remaining
+        });
+    }
+
+    private void CommitPendingReservations()
+    {
+        foreach (var pending in _pendingReservations.Where(r => !r.CommitRequested && r.ReservedAmount > 0).ToList())
+        {
+            _routes.RequestCommitReservation(new CommitReservationRequestDto
+            {
+                RequestId = Guid.NewGuid().ToString("N"),
+                SessionId = _sessionId,
+                OperationId = Guid.NewGuid().ToString("N"),
+                TerminalUid = _terminalUid,
+                TokenId = pending.TokenId
+            });
+            pending.CommitRequested = true;
+        }
+    }
+
+    private void ExpireLocalReservations()
+    {
+        var now = Time.unscaledTime;
+        var removed = false;
+        for (var i = _pendingReservations.Count - 1; i >= 0; i--)
+        {
+            if (_pendingReservations[i].ExpiresAt > now)
+            {
+                continue;
+            }
+
+            _pendingReservations.RemoveAt(i);
+            removed = true;
+        }
+
+        if (removed)
+        {
+            RequestSessionSnapshot();
+        }
+    }
+
+    private void RequestSessionSnapshot()
+    {
+        if (!IsActive || _terminal == null)
+        {
+            return;
+        }
+
+        _routes.RequestOpenSession(new OpenSessionRequestDto
+        {
+            RequestId = Guid.NewGuid().ToString("N"),
+            SessionId = _sessionId,
+            TerminalUid = _terminalUid,
+            AnchorX = _terminal.transform.position.x,
+            AnchorY = _terminal.transform.position.y,
+            AnchorZ = _terminal.transform.position.z,
+            Radius = _scanRadius
+        });
+        _nextSnapshotRetryAt = Time.unscaledTime + 0.5f;
+    }
+
+    private Dictionary<ItemKey, int> CaptureCurrentDisplayedTotals()
+    {
+        var displayed = new Dictionary<ItemKey, int>();
+        if (_terminal == null)
+        {
+            return displayed;
+        }
+
+        var inventory = _terminal.GetInventory();
+        if (inventory == null)
+        {
+            return displayed;
+        }
+
+        foreach (var item in inventory.GetAllItems())
+        {
+            if (item?.m_dropPrefab == null || item.m_stack <= 0)
+            {
+                continue;
+            }
+
+            var key = new ItemKey(item.m_dropPrefab.name, item.m_quality, item.m_variant);
+            displayed[key] = displayed.TryGetValue(key, out var existing) ? existing + item.m_stack : item.m_stack;
+        }
+
+        return displayed;
+    }
+
+    private void ReplaceDisplayedTotals(Dictionary<ItemKey, int> totals)
+    {
+        _displayedTotals.Clear();
+        foreach (var kv in totals)
+        {
+            _displayedTotals[kv.Key] = kv.Value;
+        }
+    }
+
+    private void RefreshTerminalInventoryFromAuthoritative()
+    {
+        if (_terminal == null)
+        {
+            return;
+        }
+
+        var inventory = _terminal.GetInventory();
+        if (inventory == null)
+        {
+            return;
+        }
+
+        _isApplyingProjection = true;
+        try
+        {
+            ClearInventory(inventory);
+            _displayedTotals.Clear();
+
+            var width = Math.Max(1, GetInventoryWidth(inventory));
+            var filtered = _authoritativeTotals
+                .Where(kvp => kvp.Value > 0 && MatchesSearch(GetDisplayName(kvp.Key)))
+                .Select(kvp => new
+                {
+                    Entry = kvp,
+                    DisplayName = GetDisplayName(kvp.Key),
+                    TypeOrder = GetItemTypeOrder(kvp.Key),
+                    SubgroupOrder = GetSubgroupOrder(kvp.Key)
+                })
+                .OrderBy(x => x.TypeOrder)
+                .ThenBy(x => x.SubgroupOrder)
+                .ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ThenByDescending(x => x.Entry.Value)
+                .Select(x => x.Entry)
+                .ToList();
+
+            var totalVirtualStacks = filtered.Sum(kvp => (int)Math.Ceiling(kvp.Value / 999f));
+            var reserveEmptySlots = _slotsTotalPhysical > SlotsUsedVirtual ? 1 : 0;
+            var requiredSlots = totalVirtualStacks + reserveEmptySlots;
+            _contentRows = Math.Max(_visibleRows, (int)Math.Ceiling(requiredSlots / (float)width));
+            SetInventorySize(inventory, width, _contentRows);
+
+            foreach (var kvp in filtered)
+            {
+                var remaining = kvp.Value;
+                while (remaining > 0)
+                {
+                    var stack = Math.Min(999, remaining);
+                    var item = CreateItemStack(kvp.Key, stack);
+                    if (item == null || !inventory.AddItem(item))
+                    {
+                        break;
+                    }
+
+                    remaining -= stack;
+                }
+
+                _displayedTotals[kvp.Key] = kvp.Value - remaining;
+            }
+        }
+        finally
+        {
+            _isApplyingProjection = false;
+        }
+    }
+
+    private bool MatchesSearch(string displayName)
+    {
+        return string.IsNullOrWhiteSpace(_searchQuery)
+               || displayName.IndexOf(_searchQuery, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private void RefreshTrackedChestHandles()
+    {
+        if (_terminal == null)
+        {
+            _trackedChests.Clear();
+            _nextTrackedChestRefreshAt = Time.unscaledTime + TrackedChestRefreshSeconds;
+            return;
+        }
+
+        _trackedChests = _scanner
+            .GetNearbyContainers(_terminal.transform.position, _scanRadius, _terminal, onlyVanillaChests: true)
+            .ToList();
+        _nextTrackedChestRefreshAt = Time.unscaledTime + TrackedChestRefreshSeconds;
     }
 
     private static string BuildContainerUid(Container container)
@@ -270,6 +729,16 @@ public sealed class UnifiedTerminalSessionService
         }
 
         return container.GetInstanceID().ToString();
+    }
+
+    private bool IsSessionTerminal(Container container)
+    {
+        if (container == null || string.IsNullOrWhiteSpace(_terminalUid))
+        {
+            return false;
+        }
+
+        return string.Equals(BuildContainerUid(container), _terminalUid, StringComparison.Ordinal);
     }
 
     private static void ForceReleaseContainerUse(Container container)
@@ -311,309 +780,33 @@ public sealed class UnifiedTerminalSessionService
         {
             // Best effort only.
         }
-
-        try
-        {
-            var zdo = container.GetComponent<ZNetView>()?.GetZDO();
-            if (zdo != null)
-            {
-                zdo.Set("inUse", false);
-                zdo.Set("InUse", false);
-            }
-        }
-        catch
-        {
-            // Best effort only.
-        }
     }
 
-    private void RebuildTotalsFromPhysicalStorage()
+    private bool IsDragInProgress()
     {
-        _baseTotals.Clear();
-        _workingTotals.Clear();
-        _displayedTotals.Clear();
-
-        foreach (var chest in _chests)
+        if (InventoryGui.instance == null || DragItemField == null)
         {
-            var inv = chest.Container.GetInventory();
-            if (inv == null)
-            {
-                continue;
-            }
-
-            foreach (var item in inv.GetAllItems())
-            {
-                if (item?.m_dropPrefab == null || item.m_stack <= 0)
-                {
-                    continue;
-                }
-
-                var key = new ItemKey(item.m_dropPrefab.name, item.m_quality, item.m_variant);
-                _baseTotals[key] = _baseTotals.TryGetValue(key, out var existing) ? existing + item.m_stack : item.m_stack;
-                _workingTotals[key] = _baseTotals[key];
-                if (!_prototypes.ContainsKey(key))
-                {
-                    _prototypes[key] = item.Clone();
-                }
-
-                EnsureStack999(item);
-            }
+            return false;
         }
+
+        return DragItemField.GetValue(InventoryGui.instance) is ItemDrop.ItemData dragItem && dragItem != null && dragItem.m_stack > 0;
     }
 
-    private void RefreshTerminalInventoryFromWorking()
+    private void RemovePendingToken(string tokenId)
     {
-        if (_terminal == null)
+        if (string.IsNullOrWhiteSpace(tokenId))
         {
             return;
         }
 
-        var inventory = _terminal.GetInventory();
-        if (inventory == null)
-        {
-            return;
-        }
-
-        ClearInventory(inventory);
-        _displayedTotals.Clear();
-
-        var width = Math.Max(1, GetInventoryWidth(inventory));
-        var filtered = _workingTotals
-            .Where(kvp => kvp.Value > 0 && MatchesSearch(GetDisplayName(kvp.Key)))
-            .Select(kvp => new
-            {
-                Entry = kvp,
-                DisplayName = GetDisplayName(kvp.Key),
-                TypeOrder = GetItemTypeOrder(kvp.Key),
-                SubgroupOrder = GetSubgroupOrder(kvp.Key)
-            })
-            .OrderBy(x => x.TypeOrder)
-            .ThenBy(x => x.SubgroupOrder)
-            .ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .ThenByDescending(x => x.Entry.Value)
-            .Select(x => x.Entry)
-            .ToList();
-
-        var totalVirtualStacks = filtered.Sum(kvp => (int)Math.Ceiling(kvp.Value / 999f));
-        var reserveEmptySlots = _slotsTotalPhysical > SlotsUsedVirtual ? 1 : 0;
-        var requiredSlots = totalVirtualStacks + reserveEmptySlots;
-        _contentRows = Math.Max(_visibleRows, (int)Math.Ceiling(requiredSlots / (float)width));
-        SetInventorySize(inventory, width, _contentRows);
-
-        foreach (var kvp in filtered)
-        {
-            var remaining = kvp.Value;
-            while (remaining > 0)
-            {
-                var stack = Math.Min(999, remaining);
-                var item = CreateItemStack(kvp.Key, stack);
-                if (item == null || !inventory.AddItem(item))
-                {
-                    break;
-                }
-
-                remaining -= stack;
-            }
-
-            _displayedTotals[kvp.Key] = kvp.Value - remaining;
-        }
+        _pendingReservations.RemoveAll(r => string.Equals(r.TokenId, tokenId, StringComparison.Ordinal));
     }
 
-    private bool MatchesSearch(string displayName)
+    private void MarkPendingCommitAsRetryable(string tokenId)
     {
-        return string.IsNullOrWhiteSpace(_searchQuery)
-               || displayName.IndexOf(_searchQuery, StringComparison.OrdinalIgnoreCase) >= 0;
-    }
-
-    private void SyncDisplayedDeltaToWorking()
-    {
-        if (_terminal == null)
+        foreach (var pending in _pendingReservations.Where(r => string.Equals(r.TokenId, tokenId, StringComparison.Ordinal)))
         {
-            return;
-        }
-
-        var inventory = _terminal.GetInventory();
-        if (inventory == null)
-        {
-            return;
-        }
-
-        var currentDisplayed = new Dictionary<ItemKey, int>();
-        foreach (var item in inventory.GetAllItems())
-        {
-            if (item?.m_dropPrefab == null || item.m_stack <= 0)
-            {
-                continue;
-            }
-
-            var key = new ItemKey(item.m_dropPrefab.name, item.m_quality, item.m_variant);
-            currentDisplayed[key] = currentDisplayed.TryGetValue(key, out var existing) ? existing + item.m_stack : item.m_stack;
-        }
-
-        var keys = new HashSet<ItemKey>(_displayedTotals.Keys);
-        keys.UnionWith(currentDisplayed.Keys);
-        foreach (var key in keys)
-        {
-            var previous = _displayedTotals.TryGetValue(key, out var prev) ? prev : 0;
-            var current = currentDisplayed.TryGetValue(key, out var now) ? now : 0;
-            var delta = current - previous;
-            if (delta == 0)
-            {
-                continue;
-            }
-
-            var existing = _workingTotals.TryGetValue(key, out var value) ? value : 0;
-            _workingTotals[key] = Math.Max(0, existing + delta);
-        }
-
-        _displayedTotals.Clear();
-        foreach (var kv in currentDisplayed)
-        {
-            _displayedTotals[kv.Key] = kv.Value;
-        }
-    }
-
-    private void CommitDeltasToPhysicalStorage()
-    {
-        if (_player == null)
-        {
-            return;
-        }
-
-        foreach (var key in _workingTotals.Keys.Union(_baseTotals.Keys).ToList())
-        {
-            var original = _baseTotals.TryGetValue(key, out var o) ? o : 0;
-            var current = _workingTotals.TryGetValue(key, out var c) ? c : 0;
-            var delta = current - original;
-            if (delta == 0)
-            {
-                continue;
-            }
-
-            if (delta < 0)
-            {
-                var expectedRemoved = -delta;
-                var actualRemoved = RemoveFromChests(key, expectedRemoved);
-                if (actualRemoved < expectedRemoved)
-                {
-                    RemoveFromPlayerInventory(key, expectedRemoved - actualRemoved);
-                }
-            }
-            else
-            {
-                var expectedStored = delta;
-                var actualStored = AddToChests(key, expectedStored);
-                if (actualStored < expectedStored)
-                {
-                    AddToPlayerInventory(key, expectedStored - actualStored);
-                }
-            }
-        }
-    }
-
-    private int RemoveFromChests(ItemKey key, int amount)
-    {
-        var remaining = amount;
-        foreach (var chest in _chests.OrderBy(c => c.Distance).ThenBy(c => c.SourceId))
-        {
-            if (remaining <= 0)
-            {
-                break;
-            }
-
-            var inv = chest.Container.GetInventory();
-            if (inv == null || (_config.RequireAccessCheck.Value && !CanAccess(chest.Container, _player!)))
-            {
-                continue;
-            }
-
-            foreach (var item in inv.GetAllItems().Where(i => MatchKey(i, key)).ToList())
-            {
-                if (remaining <= 0)
-                {
-                    break;
-                }
-
-                var take = Math.Min(item.m_stack, remaining);
-                inv.RemoveItem(item, take);
-                remaining -= take;
-            }
-        }
-
-        return amount - remaining;
-    }
-
-    private int AddToChests(ItemKey key, int amount)
-    {
-        var remaining = amount;
-        foreach (var chest in _chests.OrderBy(c => c.Distance).ThenBy(c => c.SourceId))
-        {
-            if (remaining <= 0)
-            {
-                break;
-            }
-
-            var inv = chest.Container.GetInventory();
-            if (inv == null || (_config.RequireAccessCheck.Value && !CanAccess(chest.Container, _player!)))
-            {
-                continue;
-            }
-
-            while (remaining > 0)
-            {
-                var stack = CreateItemStack(key, Math.Min(999, remaining));
-                if (stack == null || !inv.AddItem(stack))
-                {
-                    break;
-                }
-
-                remaining -= stack.m_stack;
-            }
-        }
-
-        return amount - remaining;
-    }
-
-    private void RemoveFromPlayerInventory(ItemKey key, int amount)
-    {
-        if (_player == null || amount <= 0)
-        {
-            return;
-        }
-
-        var remaining = amount;
-        var playerInventory = _player.GetInventory();
-        foreach (var item in playerInventory.GetAllItems().Where(i => i != null && MatchKey(i, key)).ToList())
-        {
-            if (remaining <= 0)
-            {
-                break;
-            }
-
-            var remove = Math.Min(remaining, item.m_stack);
-            playerInventory.RemoveItem(item, remove);
-            remaining -= remove;
-        }
-    }
-
-    private void AddToPlayerInventory(ItemKey key, int amount)
-    {
-        if (_player == null || amount <= 0)
-        {
-            return;
-        }
-
-        var remaining = amount;
-        var playerInventory = _player.GetInventory();
-        while (remaining > 0)
-        {
-            var stack = CreateItemStack(key, Math.Min(999, remaining));
-            if (stack == null || !playerInventory.AddItem(stack))
-            {
-                break;
-            }
-
-            remaining -= stack.m_stack;
+            pending.CommitRequested = false;
         }
     }
 
@@ -668,8 +861,6 @@ public sealed class UnifiedTerminalSessionService
         }
 
         var prefab = key.PrefabName.ToLowerInvariant();
-
-        // Mantem minérios/metais próximos sem custo alto: só checks simples de string.
         if (prefab.Contains("ore") || prefab.Contains("scrap") || prefab.Contains("metal") || prefab.Contains("ingot") || prefab.Contains("bar"))
         {
             return 10;
@@ -723,16 +914,6 @@ public sealed class UnifiedTerminalSessionService
         }
 
         _originalStackSizes.Clear();
-    }
-
-    private static int GetInventoryTotalSlots(Inventory? inventory)
-    {
-        if (inventory == null)
-        {
-            return 0;
-        }
-
-        return GetInventoryWidth(inventory) * GetInventoryHeight(inventory);
     }
 
     private static int GetInventoryWidth(Inventory inventory)
@@ -810,34 +991,12 @@ public sealed class UnifiedTerminalSessionService
         }
     }
 
-    private static bool MatchKey(ItemDrop.ItemData item, ItemKey key)
+    private sealed class PendingReservation
     {
-        return item?.m_dropPrefab != null
-               && item.m_dropPrefab.name == key.PrefabName
-               && item.m_quality == key.Quality
-               && item.m_variant == key.Variant
-               && item.m_stack > 0;
+        public string TokenId { get; set; } = string.Empty;
+        public ItemKey Key { get; set; }
+        public int ReservedAmount { get; set; }
+        public float ExpiresAt { get; set; }
+        public bool CommitRequested { get; set; }
     }
-
-    private static bool CanAccess(Container container, Player player)
-    {
-        var method = typeof(Container).GetMethod("CheckAccess", BindingFlags.Instance | BindingFlags.Public);
-        if (method == null)
-        {
-            return true;
-        }
-
-        if (method.GetParameters().Length == 1 && method.GetParameters()[0].ParameterType == typeof(long))
-        {
-            return (bool)method.Invoke(container, new object[] { player.GetPlayerID() });
-        }
-
-        if (method.GetParameters().Length == 0)
-        {
-            return (bool)method.Invoke(container, null);
-        }
-
-        return true;
-    }
-
 }

@@ -4,6 +4,7 @@ using HarmonyLib;
 using Jotunn.Managers;
 using TMPro;
 using UnifiedStorage.Mod.Config;
+using UnifiedStorage.Mod.Network;
 using UnifiedStorage.Mod.Patches;
 using UnifiedStorage.Mod.Pieces;
 using UnifiedStorage.Mod.Server;
@@ -19,7 +20,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 {
     public const string PluginGuid = "andre.valheim.unifiedstorage";
     public const string PluginName = "Unified Storage";
-    public const string PluginVersion = "1.0.3";
+    public const string PluginVersion = "1.0.4";
     private const int VisibleGridRows = 7;
     private const float FooterPanelBottomOffset = -62f;
     private const float FooterPanelHeight = 44f;
@@ -42,6 +43,8 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     private StorageConfig? _config;
     private Harmony? _harmony;
     private UnifiedTerminalSessionService? _session;
+    private TerminalAuthorityService? _authority;
+    private TerminalRpcRoutes? _rpcRoutes;
     private UnifiedChestPieceRegistrar? _pieceRegistrar;
 
     private RectTransform? _nativeUiRoot;
@@ -66,7 +69,10 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _config = new StorageConfig(Config);
 
         var scanner = new ContainerScanner(_config);
-        _session = new UnifiedTerminalSessionService(_config, scanner, Logger);
+        _authority = new TerminalAuthorityService(_config, scanner, Logger);
+        _rpcRoutes = new TerminalRpcRoutes(_authority, Logger);
+        _rpcRoutes.EnsureRegistered();
+        _session = new UnifiedTerminalSessionService(_config, scanner, _rpcRoutes, Logger);
         _pieceRegistrar = new UnifiedChestPieceRegistrar(_config, Logger);
         PrefabManager.OnVanillaPrefabsAvailable += OnVanillaPrefabsAvailable;
 
@@ -93,6 +99,8 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 
     private void Update()
     {
+        _rpcRoutes?.EnsureRegistered();
+        _authority?.Tick();
         _session?.Tick();
         TryProcessWorldChangeRefresh();
     }
@@ -190,7 +198,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 
     internal void OnTrackedInventoryChanged(Inventory inventory)
     {
-        if (_isApplyingRefresh || _session == null || !_session.IsActive || inventory == null)
+        if (_isApplyingRefresh || _session == null || !_session.IsActive || inventory == null || _session.IsApplyingProjection)
         {
             return;
         }
@@ -403,11 +411,6 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
             return;
         }
 
-        if (IsDragInProgress(InventoryGui.instance))
-        {
-            return;
-        }
-
         _trackedInventoryDirty = false;
         ExecuteSessionRefresh(() => _session.NotifyContainerInteraction());
         UpdateMetaText();
@@ -417,12 +420,6 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     internal void OnInventoryGridInteraction(InventoryGrid grid)
     {
         if (_session == null || !_session.IsActive || InventoryGui.instance == null || grid == null)
-        {
-            return;
-        }
-
-        var containerGrid = ContainerGridField?.GetValue(InventoryGui.instance) as InventoryGrid;
-        if (!ReferenceEquals(grid, containerGrid))
         {
             return;
         }

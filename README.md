@@ -2,7 +2,7 @@
 
 Unified storage for Valheim using a dedicated terminal, without changing vanilla chest behavior.
 
-## Current state (v1.0.3)
+## Current state (v1.0.4)
 
 - New placeable: `Unified Chest` (via Jotunn).
 - Opening the terminal uses Valheim's native chest UI.
@@ -12,6 +12,7 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 - Type-based ordering with lightweight material grouping (for example: ores/metals).
 - Deposit and withdraw use normal chest interactions.
 - `Take all` is disabled in the terminal to avoid incorrect behavior.
+- Multiplayer consistency is server-authoritative with reservation/timeout flow.
 
 ## Scope
 
