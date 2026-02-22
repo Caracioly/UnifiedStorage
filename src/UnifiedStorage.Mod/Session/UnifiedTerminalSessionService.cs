@@ -371,7 +371,9 @@ public sealed class UnifiedTerminalSessionService
             return;
         }
 
-        if (delta.Revision < _revision)
+        if (delta.Revision < _revision
+            && (string.IsNullOrWhiteSpace(delta.SessionId)
+                || string.Equals(delta.SessionId, _sessionId, StringComparison.Ordinal)))
         {
             return;
         }
@@ -397,6 +399,13 @@ public sealed class UnifiedTerminalSessionService
     private void ApplySnapshot(SessionSnapshotDto snapshot)
     {
         if (!CanApplySnapshot(snapshot))
+        {
+            return;
+        }
+
+        if (snapshot.Revision < _revision
+            && (string.IsNullOrWhiteSpace(snapshot.SessionId)
+                || string.Equals(snapshot.SessionId, _sessionId, StringComparison.Ordinal)))
         {
             return;
         }
@@ -832,11 +841,6 @@ public sealed class UnifiedTerminalSessionService
             return;
         }
 
-        if (IsLocalServer())
-        {
-            return;
-        }
-
         RestoreToLocalPlayerInventory(pending.Key, toRestore);
     }
 
@@ -859,23 +863,6 @@ public sealed class UnifiedTerminalSessionService
         {
             pending.CommitRequested = false;
         }
-    }
-
-    private static bool IsLocalServer()
-    {
-        if (ZNet.instance == null)
-        {
-            return true;
-        }
-
-        var isServerMethod = typeof(ZNet).GetMethod("IsServer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (isServerMethod != null && isServerMethod.Invoke(ZNet.instance, null) is bool isServer)
-        {
-            return isServer;
-        }
-
-        var isServerField = typeof(ZNet).GetField("m_isServer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        return isServerField?.GetValue(ZNet.instance) as bool? ?? true;
     }
 
     private void RestoreToLocalPlayerInventory(ItemKey key, int amount)

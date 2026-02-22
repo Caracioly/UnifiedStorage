@@ -46,6 +46,10 @@ public sealed class TerminalAuthorityService
             foreach (var state in _states.Values.ToList())
             {
                 state.Subscribers.RemoveWhere(peer => !IsPeerConnected(peer));
+                foreach (var stalePeer in state.PeerPlayerIds.Keys.Where(peer => !IsPeerConnected(peer)).ToList())
+                {
+                    state.PeerPlayerIds.Remove(stalePeer);
+                }
 
                 var expiredOrDisconnected = state.Reservations.Values
                     .Where(r => r.ExpiresAt <= now || !IsPeerConnected(r.PeerId))
@@ -98,6 +102,28 @@ public sealed class TerminalAuthorityService
             }
 
             var state = GetOrCreateState(request);
+            if (!TryResolveAndBindPlayerId(state, sender, request.PlayerId, out var resolvedPlayerId))
+            {
+                return new OpenSessionResponseDto
+                {
+                    RequestId = request.RequestId,
+                    Success = false,
+                    Reason = "Player identity mismatch",
+                    Snapshot = new SessionSnapshotDto()
+                };
+            }
+
+            if (resolvedPlayerId <= 0)
+            {
+                return new OpenSessionResponseDto
+                {
+                    RequestId = request.RequestId,
+                    Success = false,
+                    Reason = "Unable to resolve player identity",
+                    Snapshot = new SessionSnapshotDto()
+                };
+            }
+
             state.Subscribers.Add(sender);
 
             var snapshot = BuildSnapshot(state);
@@ -143,7 +169,13 @@ public sealed class TerminalAuthorityService
                 return result;
             }
 
-            var player = FindPlayerById(request.PlayerId);
+            if (!TryGetMappedPlayerId(state, sender, request.PlayerId, out var playerId))
+            {
+                result = ReserveFailure(request, "Player identity mismatch", BuildSnapshot(state), state.Revision);
+                return result;
+            }
+
+            var player = FindPlayerById(playerId);
             var removed = RemoveFromChests(state, request.Key, request.Amount, player);
             if (removed <= 0)
             {
@@ -276,7 +308,14 @@ public sealed class TerminalAuthorityService
             }
 
             var cancelAmount = request.Amount > 0 ? Math.Min(request.Amount, reservation.Amount) : reservation.Amount;
-            var player = FindPlayerById(request.PlayerId);
+            if (!TryGetMappedPlayerId(state, sender, request.PlayerId, out var playerId))
+            {
+                RememberOperation(state, request.OperationId);
+                result = ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Player identity mismatch", BuildSnapshot(state), state.Revision, "cancel");
+                return result;
+            }
+
+            var player = FindPlayerById(playerId);
             var restored = AddToChests(state, reservation.Key, cancelAmount, player);
             var unresolved = cancelAmount - restored;
             if (unresolved > 0)
@@ -352,7 +391,13 @@ public sealed class TerminalAuthorityService
                 return ApplyFailure(request.RequestId, string.Empty, "Conflict", BuildSnapshot(state), state.Revision, "deposit");
             }
 
-            var player = FindPlayerById(request.PlayerId);
+            if (!TryGetMappedPlayerId(state, sender, request.PlayerId, out var playerId))
+            {
+                RememberOperation(state, request.OperationId);
+                return ApplyFailure(request.RequestId, string.Empty, "Player identity mismatch", BuildSnapshot(state), state.Revision, "deposit");
+            }
+
+            var player = FindPlayerById(playerId);
             if (player == null)
             {
                 RememberOperation(state, request.OperationId);
@@ -417,13 +462,16 @@ public sealed class TerminalAuthorityService
                 return;
             }
 
+            state.PeerPlayerIds.TryGetValue(sender, out var mappedPlayerId);
             state.Subscribers.Remove(sender);
+            state.PeerPlayerIds.Remove(sender);
 
             var cancelledReservations = state.Reservations.Values
                 .Where(r => r.PeerId == sender)
                 .ToList();
 
-            var player = FindPlayerById(request.PlayerId);
+            var effectivePlayerId = mappedPlayerId > 0 ? mappedPlayerId : request.PlayerId;
+            var player = FindPlayerById(effectivePlayerId);
             var anyChanged = false;
             foreach (var reservation in cancelledReservations)
             {
@@ -924,6 +972,98 @@ public sealed class TerminalAuthorityService
         return null;
     }
 
+    private static bool TryResolveAndBindPlayerId(TerminalState state, long sender, long requestedPlayerId, out long resolvedPlayerId)
+    {
+        resolvedPlayerId = 0;
+        var runtimePlayerId = ResolvePlayerIdFromPeer(sender);
+        if (runtimePlayerId > 0)
+        {
+            if (requestedPlayerId > 0 && requestedPlayerId != runtimePlayerId)
+            {
+                return false;
+            }
+
+            state.PeerPlayerIds[sender] = runtimePlayerId;
+            resolvedPlayerId = runtimePlayerId;
+            return true;
+        }
+
+        if (state.PeerPlayerIds.TryGetValue(sender, out var mapped))
+        {
+            if (requestedPlayerId > 0 && requestedPlayerId != mapped)
+            {
+                return false;
+            }
+
+            resolvedPlayerId = mapped;
+            return true;
+        }
+
+        if (requestedPlayerId > 0 && sender <= 0)
+        {
+            state.PeerPlayerIds[sender] = requestedPlayerId;
+            resolvedPlayerId = requestedPlayerId;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetMappedPlayerId(TerminalState state, long sender, long requestedPlayerId, out long playerId)
+    {
+        playerId = 0;
+        if (!state.PeerPlayerIds.TryGetValue(sender, out var mapped))
+        {
+            return false;
+        }
+
+        if (requestedPlayerId > 0 && requestedPlayerId != mapped)
+        {
+            return false;
+        }
+
+        playerId = mapped;
+        return true;
+    }
+
+    private static long ResolvePlayerIdFromPeer(long sender)
+    {
+        if (sender <= 0)
+        {
+            return Player.m_localPlayer?.GetPlayerID() ?? 0L;
+        }
+
+        foreach (var player in Player.GetAllPlayers())
+        {
+            if (player == null)
+            {
+                continue;
+            }
+
+            var nview = player.GetComponent<ZNetView>();
+            var zdo = nview?.GetZDO();
+            if (zdo == null)
+            {
+                continue;
+            }
+
+            var zdoType = zdo.GetType();
+            var getOwnerMethod = zdoType.GetMethod("GetOwner", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (getOwnerMethod != null && getOwnerMethod.Invoke(zdo, null) is long ownerByMethod && ownerByMethod == sender)
+            {
+                return player.GetPlayerID();
+            }
+
+            var ownerField = zdoType.GetField("m_owner", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (ownerField != null && ownerField.GetValue(zdo) is long ownerByField && ownerByField == sender)
+            {
+                return player.GetPlayerID();
+            }
+        }
+
+        return 0L;
+    }
+
     private static bool IsPeerConnected(long peerId)
     {
         if (peerId <= 0 || ZNet.instance == null)
@@ -1137,6 +1277,7 @@ public sealed class TerminalAuthorityService
         public int ChestCount { get; set; }
         public List<ChestHandle> Chests { get; set; } = new();
         public HashSet<long> Subscribers { get; } = new();
+        public Dictionary<long, long> PeerPlayerIds { get; } = new();
         public Dictionary<string, ReservationRecord> Reservations { get; } = new(StringComparer.Ordinal);
         public HashSet<string> ProcessedOperations { get; } = new(StringComparer.Ordinal);
         public Queue<string> OperationOrder { get; } = new();
