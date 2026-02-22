@@ -231,7 +231,9 @@ public sealed class UnifiedTerminalSessionService
             .ToList();
 
         var totalVirtualStacks = filtered.Sum(kvp => (int)Math.Ceiling(kvp.Value / 999f));
-        _contentRows = Math.Max(_visibleRows, (int)Math.Ceiling(totalVirtualStacks / (float)width));
+        var reserveEmptySlots = _slotsTotalPhysical > SlotsUsedVirtual ? 1 : 0;
+        var requiredSlots = totalVirtualStacks + reserveEmptySlots;
+        _contentRows = Math.Max(_visibleRows, (int)Math.Ceiling(requiredSlots / (float)width));
         SetInventorySize(inventory, width, _contentRows);
 
         foreach (var kvp in filtered)
