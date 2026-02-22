@@ -8,11 +8,14 @@ using UnifiedStorage.Mod.Config;
 using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Models;
 using UnifiedStorage.Mod.Pieces;
+using UnityEngine;
 
 namespace UnifiedStorage.Mod.Session;
 
 public sealed class UnifiedTerminalSessionService
 {
+    private const float CloseGraceSeconds = 0.35f;
+
     private readonly StorageConfig _config;
     private readonly IContainerScanner _scanner;
     private readonly ManualLogSource _logger;
@@ -28,13 +31,14 @@ public sealed class UnifiedTerminalSessionService
     private List<ChestHandle> _chests = new();
     private string _searchQuery = string.Empty;
     private float _scanRadius;
+    private string _terminalUid = string.Empty;
+    private float _pendingCloseSince = -1f;
     private int _slotsTotalPhysical;
     private int _chestCount;
     private int _originalInventoryWidth;
     private int _originalInventoryHeight;
     private int _visibleRows;
     private int _contentRows;
-    private string? _originalContainerName;
     private int _uiRevision;
 
     public UnifiedTerminalSessionService(StorageConfig config, IContainerScanner scanner, ManualLogSource logger)
@@ -91,12 +95,13 @@ public sealed class UnifiedTerminalSessionService
     public void BeginSession(Container terminal, Player player)
     {
         EndSession();
+        ForceReleaseContainerUse(terminal);
 
         _terminal = terminal;
         _player = player;
         _searchQuery = string.Empty;
-        _originalContainerName = GetContainerName(terminal);
-        SetContainerName(terminal, "Storage Interface");
+        _terminalUid = BuildContainerUid(terminal);
+        _pendingCloseSince = -1f;
         CaptureOriginalInventorySize(terminal.GetInventory());
         _visibleRows = Math.Max(1, _originalInventoryHeight + 2);
         _uiRevision++;
@@ -116,11 +121,22 @@ public sealed class UnifiedTerminalSessionService
             return;
         }
 
-        if (InventoryGui.instance == null || !InventoryGui.IsVisible())
+        if (InventoryGui.instance == null || !InventoryGui.IsVisible() || !InventoryGui.instance.IsContainerOpen())
         {
-            EndSession();
+            if (_pendingCloseSince < 0f)
+            {
+                _pendingCloseSince = Time.unscaledTime;
+                return;
+            }
+
+            if (Time.unscaledTime - _pendingCloseSince >= CloseGraceSeconds)
+            {
+                EndSession();
+            }
             return;
         }
+
+        _pendingCloseSince = -1f;
 
         // Intentionally no per-frame sync to avoid heavy inventory rebuilds.
     }
@@ -150,6 +166,12 @@ public sealed class UnifiedTerminalSessionService
         {
             return;
         }
+        
+        if (!IsSessionTerminal(_terminal))
+        {
+            EndSession();
+            return;
+        }
 
         SyncDisplayedDeltaToWorking();
         CommitDeltasToPhysicalStorage();
@@ -163,6 +185,12 @@ public sealed class UnifiedTerminalSessionService
     {
         if (!IsActive || _terminal == null)
         {
+            return;
+        }
+        
+        if (!IsSessionTerminal(_terminal))
+        {
+            EndSession();
             return;
         }
 
@@ -184,12 +212,9 @@ public sealed class UnifiedTerminalSessionService
 
         SyncDisplayedDeltaToWorking();
         CommitDeltasToPhysicalStorage();
+        ForceReleaseContainerUse(_terminal);
         ClearInventory(_terminal.GetInventory());
         RestoreTerminalInventorySize(_terminal.GetInventory());
-        if (!string.IsNullOrWhiteSpace(_originalContainerName))
-        {
-            SetContainerName(_terminal, _originalContainerName!);
-        }
 
         RestoreStackSizes();
 
@@ -201,7 +226,8 @@ public sealed class UnifiedTerminalSessionService
         _workingTotals.Clear();
         _displayedTotals.Clear();
         _prototypes.Clear();
-        _originalContainerName = null;
+        _terminalUid = string.Empty;
+        _pendingCloseSince = -1f;
         _visibleRows = 0;
         _contentRows = 0;
         _scanRadius = 0f;
@@ -221,6 +247,84 @@ public sealed class UnifiedTerminalSessionService
         _chests = _scanner.GetNearbyContainers(_terminal.transform.position, _scanRadius, _terminal, onlyVanillaChests: true).ToList();
         _chestCount = _chests.Count;
         _slotsTotalPhysical = _chests.Sum(chest => GetInventoryTotalSlots(chest.Container.GetInventory()));
+    }
+
+    private bool IsSessionTerminal(Container container)
+    {
+        if (container == null || string.IsNullOrWhiteSpace(_terminalUid))
+        {
+            return false;
+        }
+
+        var uid = BuildContainerUid(container);
+        return string.Equals(uid, _terminalUid, StringComparison.Ordinal);
+    }
+
+    private static string BuildContainerUid(Container container)
+    {
+        var znetView = container.GetComponent<ZNetView>();
+        var zdo = znetView?.GetZDO();
+        if (zdo != null)
+        {
+            return zdo.m_uid.ToString();
+        }
+
+        return container.GetInstanceID().ToString();
+    }
+
+    private static void ForceReleaseContainerUse(Container container)
+    {
+        if (container == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var setInUse = typeof(Container).GetMethod("SetInUse", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(bool) }, null);
+            setInUse?.Invoke(container, new object[] { false });
+        }
+        catch
+        {
+            // Best effort only.
+        }
+
+        try
+        {
+            var inUseField = typeof(Container).GetField("m_inUse", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (inUseField?.FieldType == typeof(bool))
+            {
+                inUseField.SetValue(container, false);
+            }
+        }
+        catch
+        {
+            // Best effort only.
+        }
+
+        try
+        {
+            var closeMethod = typeof(Container).GetMethod("Close", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+            closeMethod?.Invoke(container, null);
+        }
+        catch
+        {
+            // Best effort only.
+        }
+
+        try
+        {
+            var zdo = container.GetComponent<ZNetView>()?.GetZDO();
+            if (zdo != null)
+            {
+                zdo.Set("inUse", false);
+                zdo.Set("InUse", false);
+            }
+        }
+        catch
+        {
+            // Best effort only.
+        }
     }
 
     private void RebuildTotalsFromPhysicalStorage()
@@ -736,15 +840,4 @@ public sealed class UnifiedTerminalSessionService
         return true;
     }
 
-    private static string? GetContainerName(Container container)
-    {
-        var field = typeof(Container).GetField("m_name", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        return field?.GetValue(container) as string;
-    }
-
-    private static void SetContainerName(Container container, string name)
-    {
-        var field = typeof(Container).GetField("m_name", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        field?.SetValue(container, name);
-    }
 }

@@ -19,7 +19,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 {
     public const string PluginGuid = "andre.valheim.unifiedstorage";
     public const string PluginName = "Unified Storage";
-    public const string PluginVersion = "1.0.2";
+    public const string PluginVersion = "1.0.3";
     private const int VisibleGridRows = 7;
     private const float FooterPanelBottomOffset = -62f;
     private const float FooterPanelHeight = 44f;
@@ -57,6 +57,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     private string _lastSearch = string.Empty;
     private int _lastUiRevision = -1;
     private bool _trackedInventoryDirty;
+    private bool _isApplyingRefresh;
     private float _nextAllowedWorldRefreshAt;
 
     private void Awake()
@@ -135,6 +136,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _blockGameInput = false;
         _lastSearch = string.Empty;
         _trackedInventoryDirty = false;
+        _isApplyingRefresh = false;
         if (_searchInputField != null)
         {
             _searchInputField.text = string.Empty;
@@ -188,7 +190,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 
     internal void OnTrackedInventoryChanged(Inventory inventory)
     {
-        if (_session == null || !_session.IsActive || inventory == null)
+        if (_isApplyingRefresh || _session == null || !_session.IsActive || inventory == null)
         {
             return;
         }
@@ -406,7 +408,8 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
             return;
         }
 
-        _session.NotifyContainerInteraction();
+        _trackedInventoryDirty = false;
+        ExecuteSessionRefresh(() => _session.NotifyContainerInteraction());
         UpdateMetaText();
         RefreshContainerGrid(InventoryGui.instance);
     }
@@ -565,9 +568,27 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 
         _nextAllowedWorldRefreshAt = Time.unscaledTime + WorldChangeRefreshMinInterval;
         _trackedInventoryDirty = false;
-        _session.RefreshFromWorldChange();
+        ExecuteSessionRefresh(() => _session.RefreshFromWorldChange());
         UpdateMetaText();
         RefreshContainerGrid(InventoryGui.instance);
+    }
+
+    private void ExecuteSessionRefresh(Action refreshAction)
+    {
+        if (_isApplyingRefresh)
+        {
+            return;
+        }
+
+        _isApplyingRefresh = true;
+        try
+        {
+            refreshAction();
+        }
+        finally
+        {
+            _isApplyingRefresh = false;
+        }
     }
 
     private static void SetTakeAllButtonEnabled(InventoryGui gui, bool enabled)

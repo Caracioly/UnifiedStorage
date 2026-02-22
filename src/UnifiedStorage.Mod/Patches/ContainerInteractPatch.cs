@@ -20,6 +20,6 @@ public static class ContainerInteractPatch
         }
 
         __result = true;
-        return true;
+        return false;
     }
 }
