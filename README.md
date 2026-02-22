@@ -1,49 +1,81 @@
-# Unified Storage (Valheim 0.221.12)
+﻿# Unified Storage (Valheim 0.221.12)
 
-Mod de inventario unificado estilo "magic storage" sem crafting.
+Unified storage for Valheim using a dedicated terminal, without changing vanilla chest behavior.
 
-## Recursos implementados
+## Current state (v1.0.0)
 
-- Hotkey global (`F8`) para abrir UI de storage.
-- Leitura agregada de itens de baús estáticos no raio configurável.
-- Busca por texto (case-insensitive).
-- Retirada direta:
-  - Clique: 1 item
-  - `Shift` + clique: 1 stack (limitado por stack size/quantidade)
-- Fluxo multiplayer autoritativo via RPC:
-  - `US_RequestSnapshot`
-  - `US_SnapshotResponse`
-  - `US_WithdrawRequest`
-  - `US_WithdrawResponse`
+- New placeable: `Unified Chest` (via Jotunn).
+- Opening the terminal uses Valheim's native chest UI.
+- Aggregates items from nearby static vanilla chests within configured range.
+- Built-in text search in the interface.
+- Native scroll support for large item lists.
+- Type-based ordering with lightweight material grouping (for example: ores/metals).
+- Deposit and withdraw use normal chest interactions.
+- `Take all` is disabled in the terminal to avoid incorrect behavior.
 
-## Configuração (BepInEx)
+## Scope
 
-- `HotkeyOpen = F8`
-- `SearchDebounceMs = 80`
+- No built-in crafting system.
+- Vanilla chests remain unchanged.
+- The terminal is the only access point to unified storage.
+
+## Dependencies
+
+- `denikson-BepInExPack_Valheim`
+- `ValheimModding-Jotunn`
+
+## Configuration (BepInEx)
+
 - `ScanRadius = 20`
-- `SnapshotRefreshMs = 750`
 - `MaxContainersScanned = 128`
 - `RequireAccessCheck = true`
+- `TerminalPieceEnabled = true`
+- `TerminalDisplayName = "Unified Chest"`
+- `TerminalRangeOverride = 0`
 
-## Estrutura
+## Project structure
 
-- `src/UnifiedStorage.Mod`: plugin Valheim (BepInEx).
-- `src/UnifiedStorage.Core`: lógica pura (agregação, busca, planejamento de retirada).
-- `tests/UnifiedStorage.Core.Tests`: testes unitários da lógica pura.
+- `src/UnifiedStorage.Mod`: Valheim plugin (BepInEx + Jotunn).
+- `src/UnifiedStorage.Core`: shared models and logic.
+- `tests/UnifiedStorage.Core.Tests`: core unit tests.
 
-## Build local
+## Local build
 
-Defina a pasta `valheim_Data\\Managed` com a propriedade `VALHEIM_MANAGED_DIR`.
-
-Exemplo (PowerShell):
+PowerShell:
 
 ```powershell
-dotnet build src\UnifiedStorage.Mod\UnifiedStorage.Mod.csproj `
-  /p:VALHEIM_MANAGED_DIR="C:\Path\To\Valheim\valheim_Data\Managed"
+$VALHEIM_MANAGED_DIR = "C:\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed"
+$BEPINEX_CORE_DIR = "C:\Users\<user>\AppData\Roaming\r2modmanPlus-local\Valheim\profiles\<profile>\BepInEx\core"
+$JOTUNN_DLL = "C:\Users\<user>\AppData\Roaming\r2modmanPlus-local\Valheim\profiles\<profile>\BepInEx\plugins\ValheimModding-Jotunn\Jotunn.dll"
+
+dotnet build .\src\UnifiedStorage.Mod\UnifiedStorage.Mod.csproj -c Release `
+  /p:VALHEIM_MANAGED_DIR="$VALHEIM_MANAGED_DIR" `
+  /p:BEPINEX_CORE_DIR="$BEPINEX_CORE_DIR" `
+  /p:JOTUNN_DLL="$JOTUNN_DLL"
 ```
 
-Saída esperada: `UnifiedStorage.dll` para copiar em `BepInEx\plugins`.
+Output:
 
-## Observação do ambiente atual
+- `src/UnifiedStorage.Mod/bin/Release/net472/UnifiedStorage.dll`
+- `src/UnifiedStorage.Core/bin/Release/netstandard2.0/UnifiedStorage.Core.dll`
 
-Neste workspace não há .NET SDK instalado, então não foi possível executar `dotnet build/test` aqui.
+## Manual install (r2modman profile)
+
+Copy DLLs to:
+
+`BepInEx/plugins/UnifiedStorage/`
+
+Files:
+
+- `UnifiedStorage.dll`
+- `UnifiedStorage.Core.dll`
+
+## Thunderstore packaging
+
+Expected release ZIP layout:
+
+- `manifest.json`
+- `README.md`
+- `icon.png`
+- `plugins/UnifiedStorage/UnifiedStorage.dll`
+- `plugins/UnifiedStorage/UnifiedStorage.Core.dll`
