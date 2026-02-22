@@ -18,6 +18,8 @@ public sealed class UnifiedTerminalSessionService
     private const float CloseGraceSeconds = 0.35f;
     private const float ReservationTtlSeconds = 3f;
     private const float TrackedChestRefreshSeconds = 1f;
+    private const float OpenSessionRetryBaseSeconds = 0.5f;
+    private const float OpenSessionRetryMaxSeconds = 8f;
     private static readonly FieldInfo? DragItemField = typeof(InventoryGui).GetField("m_dragItem", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
     private readonly StorageConfig _config;
@@ -43,9 +45,11 @@ public sealed class UnifiedTerminalSessionService
     private float _nextTrackedChestRefreshAt;
     private float _nextSnapshotRetryAt;
     private bool _isApplyingProjection;
+    private bool _hasAuthoritativeSnapshot;
     private int _slotsTotalPhysical;
     private int _chestCount;
     private long _revision;
+    private int _openSessionFailureCount;
     private int _originalInventoryWidth;
     private int _originalInventoryHeight;
     private int _visibleRows;
@@ -114,7 +118,7 @@ public sealed class UnifiedTerminalSessionService
         _terminal = terminal;
         _player = player;
         _searchQuery = string.Empty;
-        _sessionId = Guid.NewGuid().ToString("N");
+        _sessionId = string.Empty;
         _terminalUid = BuildContainerUid(terminal);
         _pendingCloseSince = -1f;
         _scanRadius = _config.TerminalRangeOverride.Value > 0 ? _config.TerminalRangeOverride.Value : _config.ScanRadius.Value;
@@ -123,6 +127,8 @@ public sealed class UnifiedTerminalSessionService
         _revision = 0;
         _slotsTotalPhysical = 0;
         _chestCount = 0;
+        _hasAuthoritativeSnapshot = false;
+        _openSessionFailureCount = 0;
         _nextSnapshotRetryAt = Time.unscaledTime;
         _pendingReservations.Clear();
         _pendingDeposits.Clear();
@@ -164,10 +170,9 @@ public sealed class UnifiedTerminalSessionService
             RefreshTrackedChestHandles();
         }
 
-        if (_revision == 0 && Time.unscaledTime >= _nextSnapshotRetryAt)
+        if (!_hasAuthoritativeSnapshot && Time.unscaledTime >= _nextSnapshotRetryAt)
         {
             RequestSessionSnapshot();
-            _nextSnapshotRetryAt = Time.unscaledTime + 0.5f;
         }
 
         ExpireLocalReservations();
@@ -276,6 +281,8 @@ public sealed class UnifiedTerminalSessionService
         _slotsTotalPhysical = 0;
         _chestCount = 0;
         _revision = 0;
+        _hasAuthoritativeSnapshot = false;
+        _openSessionFailureCount = 0;
         _visibleRows = 0;
         _contentRows = 0;
         _uiRevision++;
@@ -295,6 +302,16 @@ public sealed class UnifiedTerminalSessionService
                 _logger.LogDebug($"OpenSession rejected: {response.Reason}");
             }
 
+            if (IsIdentityFailure(response.Reason))
+            {
+                _logger.LogWarning($"OpenSession failed permanently: {response.Reason}. Closing session.");
+                EndSession();
+                return;
+            }
+
+            _openSessionFailureCount = Math.Min(_openSessionFailureCount + 1, 8);
+            var retryDelay = GetOpenSessionRetryDelay(_openSessionFailureCount);
+            _nextSnapshotRetryAt = Time.unscaledTime + retryDelay;
             return;
         }
 
@@ -329,9 +346,16 @@ public sealed class UnifiedTerminalSessionService
 
     private void OnApplyResultReceived(ApplyResultDto result)
     {
-        if (!IsActive || !CanApplySnapshot(result.Snapshot))
+        if (!IsActive)
         {
             return;
+        }
+
+        var isDeposit = string.Equals(result.OperationType, "deposit", StringComparison.Ordinal);
+        if (isDeposit)
+        {
+            // Deposit rollback is keyed by request ID and must run even when snapshot payload is partial/invalid.
+            HandleDepositApplyResult(result);
         }
 
         if (string.Equals(result.OperationType, "commit", StringComparison.Ordinal))
@@ -351,9 +375,15 @@ public sealed class UnifiedTerminalSessionService
             RemovePendingToken(result.TokenId);
             RequestSessionSnapshot();
         }
-        else if (string.Equals(result.OperationType, "deposit", StringComparison.Ordinal))
+
+        if (!CanApplySnapshot(result.Snapshot))
         {
-            HandleDepositApplyResult(result);
+            if (!result.Success)
+            {
+                RequestSessionSnapshot();
+            }
+
+            return;
         }
 
         ApplySnapshot(result.Snapshot);
@@ -371,9 +401,14 @@ public sealed class UnifiedTerminalSessionService
             return;
         }
 
-        if (delta.Revision < _revision
-            && (string.IsNullOrWhiteSpace(delta.SessionId)
-                || string.Equals(delta.SessionId, _sessionId, StringComparison.Ordinal)))
+        if (!string.IsNullOrWhiteSpace(delta.SessionId)
+            && !string.IsNullOrWhiteSpace(_sessionId)
+            && !string.Equals(delta.SessionId, _sessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (delta.Revision < _revision)
         {
             return;
         }
@@ -393,6 +428,13 @@ public sealed class UnifiedTerminalSessionService
             return false;
         }
 
+        if (!string.IsNullOrWhiteSpace(snapshot.SessionId)
+            && !string.IsNullOrWhiteSpace(_sessionId)
+            && !string.Equals(snapshot.SessionId, _sessionId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         return true;
     }
 
@@ -403,9 +445,7 @@ public sealed class UnifiedTerminalSessionService
             return;
         }
 
-        if (snapshot.Revision < _revision
-            && (string.IsNullOrWhiteSpace(snapshot.SessionId)
-                || string.Equals(snapshot.SessionId, _sessionId, StringComparison.Ordinal)))
+        if (snapshot.Revision < _revision)
         {
             return;
         }
@@ -418,6 +458,8 @@ public sealed class UnifiedTerminalSessionService
         _revision = snapshot.Revision;
         _slotsTotalPhysical = snapshot.SlotsTotalPhysical;
         _chestCount = snapshot.ChestCount;
+        _hasAuthoritativeSnapshot = true;
+        _openSessionFailureCount = 0;
         _nextSnapshotRetryAt = Time.unscaledTime + 60f;
 
         _authoritativeTotals.Clear();
@@ -854,7 +896,27 @@ public sealed class UnifiedTerminalSessionService
         return string.Equals(reason, "Conflict", StringComparison.Ordinal)
                || string.Equals(reason, "Player not found", StringComparison.Ordinal)
                || string.Equals(reason, "Player has no matching item", StringComparison.Ordinal)
-               || string.Equals(reason, "Session not found", StringComparison.Ordinal);
+               || string.Equals(reason, "Session not found", StringComparison.Ordinal)
+               || string.Equals(reason, "Player identity mismatch", StringComparison.Ordinal)
+               || string.Equals(reason, "Unable to resolve player identity", StringComparison.Ordinal);
+    }
+
+    private static bool IsIdentityFailure(string reason)
+    {
+        return string.Equals(reason, "Player identity mismatch", StringComparison.Ordinal)
+               || string.Equals(reason, "Unable to resolve player identity", StringComparison.Ordinal);
+    }
+
+    private static float GetOpenSessionRetryDelay(int failureCount)
+    {
+        if (failureCount <= 0)
+        {
+            return OpenSessionRetryBaseSeconds;
+        }
+
+        var exponent = Math.Min(6, failureCount - 1);
+        var delay = OpenSessionRetryBaseSeconds * Mathf.Pow(2f, exponent);
+        return Mathf.Min(OpenSessionRetryMaxSeconds, delay);
     }
 
     private void MarkPendingCommitAsRetryable(string tokenId)

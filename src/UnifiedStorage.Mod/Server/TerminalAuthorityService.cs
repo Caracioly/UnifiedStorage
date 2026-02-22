@@ -15,6 +15,7 @@ namespace UnifiedStorage.Mod.Server;
 public sealed class TerminalAuthorityService
 {
     private const float ReservationTtlSeconds = 3f;
+    private const float SnapshotCacheSeconds = 0.2f;
     private const int MaxOperationHistory = 2048;
 
     private readonly object _sync = new();
@@ -71,6 +72,7 @@ public sealed class TerminalAuthorityService
 
                 if (anyChange)
                 {
+                    MarkSnapshotDirty(state);
                     state.Revision++;
                     var snapshot = BuildSnapshot(state);
                     deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
@@ -196,6 +198,7 @@ public sealed class TerminalAuthorityService
             };
 
             state.Revision++;
+            MarkSnapshotDirty(state);
             RememberOperation(state, request.OperationId);
             var snapshot = BuildSnapshot(state);
             deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
@@ -335,6 +338,7 @@ public sealed class TerminalAuthorityService
 
             if (restored > 0 || unresolved > 0)
             {
+                MarkSnapshotDirty(state);
                 state.Revision++;
                 var snapshot = BuildSnapshot(state);
                 deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
@@ -425,6 +429,7 @@ public sealed class TerminalAuthorityService
 
             if (stored > 0)
             {
+                MarkSnapshotDirty(state);
                 state.Revision++;
             }
 
@@ -488,6 +493,7 @@ public sealed class TerminalAuthorityService
 
             if (anyChanged)
             {
+                MarkSnapshotDirty(state);
                 state.Revision++;
                 var snapshot = BuildSnapshot(state);
                 deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
@@ -544,8 +550,14 @@ public sealed class TerminalAuthorityService
     {
         if (_states.TryGetValue(request.TerminalUid, out var existing))
         {
-            existing.AnchorPosition = new Vector3(request.AnchorX, request.AnchorY, request.AnchorZ);
-            existing.Radius = request.Radius;
+            var requestedAnchor = new Vector3(request.AnchorX, request.AnchorY, request.AnchorZ);
+            if ((existing.AnchorPosition - requestedAnchor).sqrMagnitude > 0.0001f
+                || !Mathf.Approximately(existing.Radius, request.Radius))
+            {
+                existing.AnchorPosition = requestedAnchor;
+                existing.Radius = request.Radius;
+                MarkSnapshotDirty(existing);
+            }
 
             return existing;
         }
@@ -573,9 +585,18 @@ public sealed class TerminalAuthorityService
 
     private SessionSnapshotDto BuildSnapshot(TerminalState state)
     {
+        var now = Time.unscaledTime;
+        if (!state.SnapshotDirty
+            && state.CachedSnapshot != null
+            && now - state.CachedSnapshotAt <= SnapshotCacheSeconds)
+        {
+            return state.CachedSnapshot;
+        }
+
         RefreshChestHandles(state);
 
         var totals = new Dictionary<ItemKey, int>();
+        var sourceCounts = new Dictionary<ItemKey, int>();
         var prototypes = new Dictionary<ItemKey, ItemDrop.ItemData>();
         var slotsTotal = 0;
         foreach (var chest in state.Chests)
@@ -587,6 +608,7 @@ public sealed class TerminalAuthorityService
             }
 
             slotsTotal += GetInventoryWidth(inventory) * GetInventoryHeight(inventory);
+            var seenInChest = new HashSet<ItemKey>();
             foreach (var item in inventory.GetAllItems())
             {
                 if (item?.m_dropPrefab == null || item.m_stack <= 0)
@@ -599,6 +621,11 @@ public sealed class TerminalAuthorityService
                 if (!prototypes.ContainsKey(key))
                 {
                     prototypes[key] = item.Clone();
+                }
+
+                if (seenInChest.Add(key))
+                {
+                    sourceCounts[key] = sourceCounts.TryGetValue(key, out var sources) ? sources + 1 : 1;
                 }
             }
         }
@@ -622,7 +649,7 @@ public sealed class TerminalAuthorityService
                 Key = x.Key,
                 DisplayName = x.Display,
                 TotalAmount = x.Total,
-                SourceCount = CountSourcesForKey(state.Chests, x.Key),
+                SourceCount = sourceCounts.TryGetValue(x.Key, out var sourceCount) ? sourceCount : 0,
                 StackSize = 999
             })
             .ToList();
@@ -630,7 +657,7 @@ public sealed class TerminalAuthorityService
         state.ChestCount = state.Chests.Count;
         state.SlotsTotalPhysical = slotsTotal;
 
-        return new SessionSnapshotDto
+        var snapshot = new SessionSnapshotDto
         {
             SessionId = state.SessionId,
             TerminalUid = state.TerminalUid,
@@ -640,6 +667,17 @@ public sealed class TerminalAuthorityService
             ChestCount = state.ChestCount,
             Items = items
         };
+
+        state.CachedSnapshot = snapshot;
+        state.CachedSnapshotAt = now;
+        state.SnapshotDirty = false;
+        return snapshot;
+    }
+
+    private static void MarkSnapshotDirty(TerminalState state)
+    {
+        state.SnapshotDirty = true;
+        state.CachedSnapshot = null;
     }
 
     private void RefreshChestHandles(TerminalState state)
@@ -653,26 +691,6 @@ public sealed class TerminalAuthorityService
         state.Chests = _scanner
             .GetNearbyContainers(state.AnchorPosition, state.Radius, terminal, onlyVanillaChests: true)
             .ToList();
-    }
-
-    private static int CountSourcesForKey(IEnumerable<ChestHandle> chests, ItemKey key)
-    {
-        var count = 0;
-        foreach (var chest in chests)
-        {
-            var inv = chest.Container.GetInventory();
-            if (inv == null)
-            {
-                continue;
-            }
-
-            if (inv.GetAllItems().Any(item => MatchKey(item, key)))
-            {
-                count++;
-            }
-        }
-
-        return count;
     }
 
     private int RemoveFromChests(TerminalState state, ItemKey key, int amount, Player? player)
@@ -1281,6 +1299,9 @@ public sealed class TerminalAuthorityService
         public Dictionary<string, ReservationRecord> Reservations { get; } = new(StringComparer.Ordinal);
         public HashSet<string> ProcessedOperations { get; } = new(StringComparer.Ordinal);
         public Queue<string> OperationOrder { get; } = new();
+        public bool SnapshotDirty { get; set; } = true;
+        public float CachedSnapshotAt { get; set; }
+        public SessionSnapshotDto? CachedSnapshot { get; set; }
     }
 
     private sealed class ReservationRecord
