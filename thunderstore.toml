@@ -1,10 +1,10 @@
-﻿[config]
+[config]
 schemaVersion = "0.0.1"
 
 [package]
 namespace = "andre"
 name = "UnifiedStorage"
-versionNumber = "1.0.5"
+versionNumber = "1.0.6"
 description = "Unified Chest Terminal for Valheim: native chest UI with nearby storage aggregation, search and scroll."
 websiteUrl = "https://github.com/Caracioly/UnifiedStorage"
 containsNsfwContent = false
@@ -19,10 +19,13 @@ readme = "./README.md"
 outdir = "./build"
 
 [[build.copy]]
-source = "./dist/UnifiedStorage-1.0.5/plugins"
+source = "./dist/UnifiedStorage-1.0.6/plugins"
 target = "/plugins"
 
 
 [publish]
 repository = "https://thunderstore.io"
 communities = [ "valheim", ]
+
+[publish.categories]
+valheim = [ "mods", ]
