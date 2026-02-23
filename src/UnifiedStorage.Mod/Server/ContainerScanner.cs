@@ -25,7 +25,7 @@ public sealed class ContainerScanner : IContainerScanner
             .Where(container => container != null)
             .Where(IsStaticChest)
             .Where(container => ignoreContainer == null || container != ignoreContainer)
-            .Where(container => !UnifiedChestTerminalMarker.IsTerminalContainer(container))
+            .Where(container => !UnifiedTerminal.IsTerminal(container))
             .Where(container => !onlyVanillaChests || ChestInclusionRules.IsVanillaChest(container))
             .Where(ChestInclusionRules.IsIncludedInUnified)
             .Select(container =>

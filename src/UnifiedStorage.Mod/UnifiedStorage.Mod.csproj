@@ -69,6 +69,10 @@
       <HintPath>$(VALHEIM_MANAGED_DIR)\assembly_utils.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="assembly_guiutils">
+      <HintPath>$(VALHEIM_MANAGED_DIR)\assembly_guiutils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="assembly_valheim">
       <HintPath>$(VALHEIM_MANAGED_DIR)\assembly_valheim.dll</HintPath>
       <Private>false</Private>

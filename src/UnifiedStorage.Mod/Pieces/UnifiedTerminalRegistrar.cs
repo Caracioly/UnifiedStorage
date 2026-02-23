@@ -4,17 +4,18 @@ using Jotunn.Configs;
 using Jotunn.Entities;
 using Jotunn.Managers;
 using UnifiedStorage.Mod.Config;
+using UnifiedStorage.Mod.Shared;
 using UnityEngine;
 
 namespace UnifiedStorage.Mod.Pieces;
 
-public sealed class UnifiedChestPieceRegistrar
+public sealed class UnifiedTerminalRegistrar
 {
     private readonly StorageConfig _config;
     private readonly ManualLogSource _logger;
     private bool _registered;
 
-    public UnifiedChestPieceRegistrar(StorageConfig config, ManualLogSource logger)
+    public UnifiedTerminalRegistrar(StorageConfig config, ManualLogSource logger)
     {
         _config = config;
         _logger = logger;
@@ -23,14 +24,12 @@ public sealed class UnifiedChestPieceRegistrar
     public void RegisterPiece()
     {
         if (_registered || !_config.TerminalPieceEnabled.Value)
-        {
             return;
-        }
 
         var basePrefabName = ResolveBaseChestPrefabName();
         if (string.IsNullOrWhiteSpace(basePrefabName))
         {
-            _logger.LogError("Unified Chest Terminal: could not resolve a vanilla chest prefab to clone.");
+            _logger.LogError("Unified Terminal: could not resolve a vanilla chest prefab to clone.");
             return;
         }
 
@@ -43,33 +42,30 @@ public sealed class UnifiedChestPieceRegistrar
         };
         pieceConfig.AddRequirement("Wood", 10, true);
 
-        var customPiece = new CustomPiece(UnifiedChestTerminalMarker.TerminalPrefabName, basePrefabName, pieceConfig);
+        var customPiece = new CustomPiece(UnifiedTerminal.TerminalPrefabName, basePrefabName, pieceConfig);
         if (!customPiece.IsValid())
         {
-            _logger.LogError($"Unified Chest Terminal: failed to create CustomPiece from base '{basePrefabName}'.");
+            _logger.LogError($"Unified Terminal: failed to create CustomPiece from base '{basePrefabName}'.");
             return;
         }
 
         var prefab = customPiece.PiecePrefab;
         if (prefab == null)
         {
-            _logger.LogError("Unified Chest Terminal: PiecePrefab is null after CustomPiece creation.");
+            _logger.LogError("Unified Terminal: PiecePrefab is null after CustomPiece creation.");
             return;
         }
 
-        UnifiedChestTerminalMarker.ConfigureDefaults(
-            _config.TerminalDisplayName.Value,
+        prefab.name = UnifiedTerminal.TerminalPrefabName;
+
+        var terminal = prefab.GetComponent<UnifiedTerminal>();
+        if (terminal == null)
+            terminal = prefab.AddComponent<UnifiedTerminal>();
+
+        terminal.ConfigureVisuals(
             _config.TerminalTintEnabled.Value,
             _config.TerminalTintColor.Value,
             _config.TerminalTintStrength.Value);
-
-        prefab.name = UnifiedChestTerminalMarker.TerminalPrefabName;
-        var marker = prefab.GetComponent<UnifiedChestTerminalMarker>();
-        if (marker == null)
-        {
-            marker = prefab.AddComponent<UnifiedChestTerminalMarker>();
-        }
-        marker.ConfigureVisuals(_config.TerminalTintEnabled.Value, _config.TerminalTintColor.Value, _config.TerminalTintStrength.Value);
 
         var piece = prefab.GetComponent<Piece>();
         if (piece != null)
@@ -78,25 +74,13 @@ public sealed class UnifiedChestPieceRegistrar
             piece.m_description = "Access nearby chests in a unified view.";
         }
 
-        TrySetContainerDisplayName(prefab.GetComponent<Container>(), _config.TerminalDisplayName.Value);
+        var container = prefab.GetComponent<Container>();
+        if (container != null)
+            ReflectionHelpers.SetContainerDisplayName(container, _config.TerminalDisplayName.Value);
 
         PieceManager.Instance.AddPiece(customPiece);
         _registered = true;
-        _logger.LogInfo($"Unified Chest Terminal piece registered (base: {basePrefabName}).");
-    }
-
-    private static void TrySetContainerDisplayName(Container? container, string displayName)
-    {
-        if (container == null || string.IsNullOrWhiteSpace(displayName))
-        {
-            return;
-        }
-
-        var nameField = typeof(Container).GetField("m_name", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (nameField?.FieldType == typeof(string))
-        {
-            nameField.SetValue(container, displayName);
-        }
+        _logger.LogInfo($"Unified Terminal piece registered (base: {basePrefabName}).");
     }
 
     private static string? ResolveBaseChestPrefabName()
@@ -112,9 +96,7 @@ public sealed class UnifiedChestPieceRegistrar
         foreach (var candidate in candidates)
         {
             if (PrefabManager.Instance.GetPrefab(candidate) != null)
-            {
                 return candidate;
-            }
         }
 
         return null;

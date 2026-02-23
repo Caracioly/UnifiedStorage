@@ -47,48 +47,6 @@ public sealed class AggregatedItem
     public int StackSize { get; set; }
 }
 
-public sealed class StorageSnapshot
-{
-    public long Revision { get; set; }
-    public int TotalSlots { get; set; }
-    public int UsedSlots { get; set; }
-    public int ChestCount { get; set; }
-    public List<AggregatedItem> Items { get; set; } = new();
-}
-
-public sealed class WithdrawRequest
-{
-    public ItemKey Key { get; set; }
-    public int Amount { get; set; }
-}
-
-public sealed class WithdrawResult
-{
-    public bool Success { get; set; }
-    public int Withdrawn { get; set; }
-    public string Reason { get; set; } = string.Empty;
-    public long Revision { get; set; }
-}
-
-public enum StoreMode
-{
-    PlaceStacks = 1,
-    StoreAll = 2
-}
-
-public sealed class StoreRequest
-{
-    public StoreMode Mode { get; set; } = StoreMode.PlaceStacks;
-}
-
-public sealed class StoreResult
-{
-    public bool Success { get; set; }
-    public int Stored { get; set; }
-    public string Reason { get; set; } = string.Empty;
-    public long Revision { get; set; }
-}
-
 public sealed class SearchResult
 {
     public IReadOnlyList<AggregatedItem> Items { get; set; } = Array.Empty<AggregatedItem>();
@@ -113,6 +71,19 @@ public sealed class PlannedTake
 public sealed class WithdrawPlan
 {
     public List<PlannedTake> Takes { get; set; } = new();
+    public int RequestedAmount { get; set; }
+    public int PlannedAmount { get; set; }
+}
+
+public sealed class PlannedDeposit
+{
+    public string SourceId { get; set; } = string.Empty;
+    public int Amount { get; set; }
+}
+
+public sealed class DepositPlan
+{
+    public List<PlannedDeposit> Deposits { get; set; } = new();
     public int RequestedAmount { get; set; }
     public int PlannedAmount { get; set; }
 }

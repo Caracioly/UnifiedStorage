@@ -30,6 +30,55 @@ public class StorageLogicTests
     }
 
     [Fact]
+    public void Aggregate_UsesResolveMaxStackSize_WhenProvided()
+    {
+        var key = new ItemKey("Wood", 1, 0);
+        var source = new List<SourceStack>
+        {
+            new() { Key = key, DisplayName = "Wood", Amount = 30, SourceId = "A", StackSize = 10 },
+            new() { Key = key, DisplayName = "Wood", Amount = 20, SourceId = "B", StackSize = 10 }
+        };
+
+        var aggregated = AggregationService.Aggregate(source, prefab => prefab == "Wood" ? 50 : 1);
+
+        Assert.Single(aggregated);
+        Assert.Equal(50, aggregated[0].TotalAmount);
+        Assert.Equal(50, aggregated[0].StackSize);
+    }
+
+    [Fact]
+    public void Aggregate_FallsBackToSourceStackSize_WhenNoResolver()
+    {
+        var key = new ItemKey("Stone", 1, 0);
+        var source = new List<SourceStack>
+        {
+            new() { Key = key, DisplayName = "Stone", Amount = 100, SourceId = "A", StackSize = 50 },
+            new() { Key = key, DisplayName = "Stone", Amount = 60, SourceId = "B", StackSize = 30 }
+        };
+
+        var aggregated = AggregationService.Aggregate(source);
+
+        Assert.Single(aggregated);
+        Assert.Equal(160, aggregated[0].TotalAmount);
+        Assert.Equal(50, aggregated[0].StackSize);
+    }
+
+    [Fact]
+    public void CalculateVirtualSlots_SumsUpCorrectly()
+    {
+        var items = new List<AggregatedItem>
+        {
+            new() { Key = new ItemKey("Wood", 1, 0), TotalAmount = 100, StackSize = 50 },
+            new() { Key = new ItemKey("Stone", 1, 0), TotalAmount = 75, StackSize = 50 },
+            new() { Key = new ItemKey("Iron", 1, 0), TotalAmount = 1, StackSize = 30 }
+        };
+
+        var slots = AggregationService.CalculateVirtualSlots(items);
+
+        Assert.Equal(5, slots);
+    }
+
+    [Fact]
     public void Search_FiltersCaseInsensitive()
     {
         var items = new List<AggregatedItem>
@@ -90,5 +139,49 @@ public class StorageLogicTests
         Assert.Equal(4, plan.PlannedAmount);
         Assert.Single(plan.Takes);
         Assert.Equal(4, plan.Takes[0].Amount);
+    }
+
+    [Fact]
+    public void DepositPlanner_DistributesAcrossContainers()
+    {
+        var containers = new List<ContainerSlot>
+        {
+            new() { SourceId = "A", FreeSpace = 10, Distance = 5f },
+            new() { SourceId = "B", FreeSpace = 15, Distance = 2f },
+            new() { SourceId = "C", FreeSpace = 5, Distance = 8f }
+        };
+
+        var plan = DepositPlanner.Plan(containers, 20);
+
+        Assert.Equal(20, plan.PlannedAmount);
+        Assert.Equal(2, plan.Deposits.Count);
+        Assert.Equal("B", plan.Deposits[0].SourceId);
+        Assert.Equal(15, plan.Deposits[0].Amount);
+        Assert.Equal("A", plan.Deposits[1].SourceId);
+        Assert.Equal(5, plan.Deposits[1].Amount);
+    }
+
+    [Fact]
+    public void DepositPlanner_ClampsToAvailableSpace()
+    {
+        var containers = new List<ContainerSlot>
+        {
+            new() { SourceId = "A", FreeSpace = 3, Distance = 1f }
+        };
+
+        var plan = DepositPlanner.Plan(containers, 10);
+
+        Assert.Equal(3, plan.PlannedAmount);
+        Assert.Single(plan.Deposits);
+        Assert.Equal(3, plan.Deposits[0].Amount);
+    }
+
+    [Fact]
+    public void DepositPlanner_ReturnsEmpty_WhenNoContainers()
+    {
+        var plan = DepositPlanner.Plan(new List<ContainerSlot>(), 10);
+
+        Assert.Equal(0, plan.PlannedAmount);
+        Assert.Empty(plan.Deposits);
     }
 }

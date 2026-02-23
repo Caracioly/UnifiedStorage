@@ -21,6 +21,22 @@ public sealed class TerminalRpcRoutes
     public const string CloseSessionRoute = "US_CloseSession";
     public const string SessionDeltaRoute = "US_SessionDelta";
 
+    private static readonly MethodInfo? ZNetGetServerPeerID =
+        typeof(ZNet).GetMethod("GetServerPeerID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+    private static readonly MethodInfo? RoutedRpcGetServerPeerID =
+        typeof(ZRoutedRpc).GetMethod("GetServerPeerID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+    private static readonly FieldInfo? RoutedRpcServerPeerIDField =
+        typeof(ZRoutedRpc).GetField("m_serverPeerID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+        ?? typeof(ZRoutedRpc).GetField("m_serverUID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+    private static readonly MethodInfo? ZNetIsServerMethod =
+        typeof(ZNet).GetMethod("IsServer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+    private static readonly FieldInfo? ZNetIsServerField =
+        typeof(ZNet).GetField("m_isServer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
     private readonly TerminalAuthorityService _authority;
     private readonly ManualLogSource _logger;
     private readonly StorageTrace _trace;
@@ -356,26 +372,19 @@ public sealed class TerminalRpcRoutes
 
     private static long ResolveServerPeerId()
     {
-        if (ZNet.instance != null)
-        {
-            var znetMethod = typeof(ZNet).GetMethod("GetServerPeerID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (znetMethod != null && znetMethod.Invoke(ZNet.instance, null) is long znetPeerId)
-            {
-                return znetPeerId;
-            }
-        }
+        if (ZNet.instance != null && ZNetGetServerPeerID != null
+            && ZNetGetServerPeerID.Invoke(ZNet.instance, null) is long znetPeerId)
+            return znetPeerId;
 
-        var routedMethod = typeof(ZRoutedRpc).GetMethod("GetServerPeerID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (routedMethod != null && routedMethod.Invoke(ZRoutedRpc.instance, null) is long routedPeerId)
+        if (ZRoutedRpc.instance != null)
         {
-            return routedPeerId;
-        }
+            if (RoutedRpcGetServerPeerID != null
+                && RoutedRpcGetServerPeerID.Invoke(ZRoutedRpc.instance, null) is long routedPeerId)
+                return routedPeerId;
 
-        var peerField = typeof(ZRoutedRpc).GetField("m_serverPeerID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                       ?? typeof(ZRoutedRpc).GetField("m_serverUID", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (peerField != null && peerField.GetValue(ZRoutedRpc.instance) is long fieldPeerId)
-        {
-            return fieldPeerId;
+            if (RoutedRpcServerPeerIDField != null
+                && RoutedRpcServerPeerIDField.GetValue(ZRoutedRpc.instance) is long fieldPeerId)
+                return fieldPeerId;
         }
 
         return 0L;
@@ -384,21 +393,13 @@ public sealed class TerminalRpcRoutes
     private static bool IsServer()
     {
         if (ZNet.instance == null)
-        {
             return true;
-        }
 
-        var isServerMethod = typeof(ZNet).GetMethod("IsServer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (isServerMethod != null && isServerMethod.Invoke(ZNet.instance, null) is bool isServer)
-        {
+        if (ZNetIsServerMethod != null && ZNetIsServerMethod.Invoke(ZNet.instance, null) is bool isServer)
             return isServer;
-        }
 
-        var isServerField = typeof(ZNet).GetField("m_isServer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        if (isServerField != null && isServerField.GetValue(ZNet.instance) is bool fieldValue)
-        {
+        if (ZNetIsServerField != null && ZNetIsServerField.GetValue(ZNet.instance) is bool fieldValue)
             return fieldValue;
-        }
 
         return true;
     }

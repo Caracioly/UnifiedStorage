@@ -2,11 +2,12 @@
 
 Unified storage for Valheim using a dedicated terminal, without changing vanilla chest behavior.
 
-## Current state (v1.0.8)
+## Current state (v1.1.0)
 
-- New placeable: `Unified Chest` (via Jotunn).
+- New placeable: `Unified Chest` (via Jotunn) with custom `Interactable`.
 - Opening the terminal uses Valheim's native chest UI.
 - Aggregates items from nearby static vanilla chests within configured range.
+- Respects real `maxStackSize` per item — no stack size mutation.
 - Built-in text search in the interface.
 - Native scroll support for large item lists.
 - Type-based ordering with lightweight material grouping (for example: ores/metals).
@@ -14,6 +15,16 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 - `Take all` is disabled in the terminal to avoid incorrect behavior.
 - Vanilla chest UI now includes `Include In Unified` toggle (default: enabled).
 - Multiplayer consistency is server-authoritative with reservation/timeout flow.
+- Delta broadcast keeps multiple players viewing the same terminal in sync.
+- Core library (`UnifiedStorage.Core`) used for aggregation, search, withdraw/deposit planning.
+
+## Architecture (v1.1.0)
+
+- `UnifiedTerminal` implements `Interactable` + `Hoverable` directly — no `Container.Interact` patch needed.
+- `ReflectionHelpers` centralizes all reflection-based access to Valheim internals.
+- `TerminalUIManager` owns all UI creation and layout management.
+- `TerminalSessionService` manages client-side session state without stack size mutation.
+- `TerminalAuthorityService` handles server-side authorization with real stack sizes.
 
 ## Scope
 
@@ -43,8 +54,15 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 
 ## Project structure
 
-- `src/UnifiedStorage.Mod`: Valheim plugin (BepInEx + Jotunn).
-- `src/UnifiedStorage.Core`: shared models and logic.
+- `src/UnifiedStorage.Mod`: Valheim plugin (BepInEx + Jotunn + Harmony).
+  - `Pieces/`: `UnifiedTerminal` (Interactable) and `UnifiedTerminalRegistrar`.
+  - `UI/`: `TerminalUIManager` — all UI creation and layout.
+  - `Server/`: `TerminalAuthorityService`, `ContainerScanner`, `ChestInclusionRules`.
+  - `Session/`: `TerminalSessionService` — client-side session logic.
+  - `Network/`: `TerminalRpcRoutes`, `TerminalCodec` — RPC and serialization.
+  - `Shared/`: `ReflectionHelpers` — centralized reflection.
+  - `Patches/`: Harmony patches for InventoryGui, InventoryGrid, ZInput.
+- `src/UnifiedStorage.Core`: shared models and pure logic (aggregation, search, withdraw/deposit planning).
 - `tests/UnifiedStorage.Core.Tests`: core unit tests.
 
 ## Local build

@@ -9,6 +9,7 @@ using UnifiedStorage.Mod.Diagnostics;
 using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Models;
 using UnifiedStorage.Mod.Pieces;
+using UnifiedStorage.Mod.Shared;
 using UnityEngine;
 
 namespace UnifiedStorage.Mod.Server;
@@ -41,19 +42,14 @@ public sealed class TerminalAuthorityService
         List<(IReadOnlyCollection<long> Peers, SessionDeltaDto Delta)> deltas = new();
         lock (_sync)
         {
-            if (_states.Count == 0)
-            {
-                return;
-            }
+            if (_states.Count == 0) return;
 
             var now = Time.unscaledTime;
             foreach (var state in _states.Values.ToList())
             {
                 state.Subscribers.RemoveWhere(peer => !IsPeerConnected(peer));
                 foreach (var stalePeer in state.PeerPlayerIds.Keys.Where(peer => !IsPeerConnected(peer)).ToList())
-                {
                     state.PeerPlayerIds.Remove(stalePeer);
-                }
 
                 var expiredOrDisconnected = state.Reservations.Values
                     .Where(r => r.ExpiresAt <= now || !IsPeerConnected(r.PeerId))
@@ -64,11 +60,7 @@ public sealed class TerminalAuthorityService
                 {
                     var restored = AddToChests(state, reservation.Key, reservation.Amount, null);
                     var unresolved = reservation.Amount - restored;
-                    if (unresolved > 0)
-                    {
-                        DropNearTerminal(state, reservation.Key, unresolved);
-                    }
-
+                    if (unresolved > 0) DropNearTerminal(state, reservation.Key, unresolved);
                     state.Reservations.Remove(reservation.TokenId);
                     anyChange = anyChange || restored > 0 || unresolved > 0;
                 }
@@ -82,12 +74,9 @@ public sealed class TerminalAuthorityService
                 }
 
                 if (state.Subscribers.Count == 0 && state.Reservations.Count == 0)
-                {
                     _states.Remove(state.TerminalUid);
-                }
             }
         }
-
         EmitDeltas(deltas);
     }
 
@@ -95,51 +84,20 @@ public sealed class TerminalAuthorityService
     {
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Open sender={sender} req={request.RequestId} session={request.SessionId} term={request.TerminalUid} player={request.PlayerId} radius={request.Radius:0.0}");
+            _trace.Info("AUTH", $"Open sender={sender} req={request.RequestId} session={request.SessionId} term={request.TerminalUid} player={request.PlayerId}");
             if (string.IsNullOrWhiteSpace(request.TerminalUid))
-            {
-                return new OpenSessionResponseDto
-                {
-                    RequestId = request.RequestId,
-                    Success = false,
-                    Reason = "Invalid terminal",
-                    Snapshot = new SessionSnapshotDto()
-                };
-            }
+                return new OpenSessionResponseDto { RequestId = request.RequestId, Success = false, Reason = "Invalid terminal" };
 
             var state = GetOrCreateState(request);
             if (!TryResolveAndBindPlayerId(state, sender, request.PlayerId, out var resolvedPlayerId))
-            {
-                return new OpenSessionResponseDto
-                {
-                    RequestId = request.RequestId,
-                    Success = false,
-                    Reason = "Player identity mismatch",
-                    Snapshot = new SessionSnapshotDto()
-                };
-            }
-
+                return new OpenSessionResponseDto { RequestId = request.RequestId, Success = false, Reason = "Player identity mismatch" };
             if (resolvedPlayerId <= 0)
-            {
-                return new OpenSessionResponseDto
-                {
-                    RequestId = request.RequestId,
-                    Success = false,
-                    Reason = "Unable to resolve player identity",
-                    Snapshot = new SessionSnapshotDto()
-                };
-            }
+                return new OpenSessionResponseDto { RequestId = request.RequestId, Success = false, Reason = "Unable to resolve player identity" };
 
             state.Subscribers.Add(sender);
-
             var snapshot = BuildSnapshot(state);
-            _trace.Info("AUTH", $"Open accepted sender={sender} mappedPlayer={resolvedPlayerId} {_trace.SnapshotSummary(snapshot)}");
-            return new OpenSessionResponseDto
-            {
-                RequestId = request.RequestId,
-                Success = true,
-                Snapshot = snapshot
-            };
+            _trace.Info("AUTH", $"Open accepted sender={sender} {_trace.SnapshotSummary(snapshot)}");
+            return new OpenSessionResponseDto { RequestId = request.RequestId, Success = true, Snapshot = snapshot };
         }
     }
 
@@ -149,58 +107,32 @@ public sealed class TerminalAuthorityService
         ReserveWithdrawResultDto result;
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Reserve sender={sender} req={request.RequestId} op={request.OperationId} session={request.SessionId} term={request.TerminalUid} key={StorageTrace.Item(request.Key)} amount={request.Amount} expectedRev={request.ExpectedRevision}");
+            _trace.Info("AUTH", $"Reserve sender={sender} op={request.OperationId} key={StorageTrace.Item(request.Key)} amount={request.Amount}");
             var state = GetState(request.TerminalUid);
-            if (state == null)
-            {
-                return ReserveFailure(request, "Session not found");
-            }
+            if (state == null) return ReserveFailure(request, "Session not found");
 
             if (IsDuplicateOperation(state, request.OperationId))
-            {
-                result = new ReserveWithdrawResultDto
-                {
-                    RequestId = request.RequestId,
-                    Success = true,
-                    Reason = "Duplicate operation ignored",
-                    Key = request.Key,
-                    ReservedAmount = 0,
-                    Revision = state.Revision,
-                    Snapshot = BuildSnapshot(state)
-                };
-                return result;
-            }
+                return new ReserveWithdrawResultDto { RequestId = request.RequestId, Success = true, Reason = "Duplicate", Key = request.Key, Revision = state.Revision, Snapshot = BuildSnapshot(state) };
 
             if (request.ExpectedRevision >= 0 && request.ExpectedRevision != state.Revision)
-            {
-                result = ReserveFailure(request, "Conflict", BuildSnapshot(state), state.Revision);
-                return result;
-            }
+                return ReserveFailure(request, "Conflict", BuildSnapshot(state), state.Revision);
 
             if (!TryGetMappedPlayerId(state, sender, request.PlayerId, out var playerId))
-            {
-                result = ReserveFailure(request, "Player identity mismatch", BuildSnapshot(state), state.Revision);
-                return result;
-            }
+                return ReserveFailure(request, "Player identity mismatch", BuildSnapshot(state), state.Revision);
 
             var player = FindPlayerById(playerId);
             var removed = RemoveFromChests(state, request.Key, request.Amount, player);
             if (removed <= 0)
             {
                 RememberOperation(state, request.OperationId);
-                result = ReserveFailure(request, "Not enough items", BuildSnapshot(state), state.Revision);
-                return result;
+                return ReserveFailure(request, "Not enough items", BuildSnapshot(state), state.Revision);
             }
 
             var token = Guid.NewGuid().ToString("N");
             state.Reservations[token] = new ReservationRecord
             {
-                TokenId = token,
-                PeerId = sender,
-                SessionId = request.SessionId ?? string.Empty,
-                Key = request.Key,
-                Amount = removed,
-                ExpiresAt = Time.unscaledTime + ReservationTtlSeconds
+                TokenId = token, PeerId = sender, SessionId = request.SessionId ?? string.Empty,
+                Key = request.Key, Amount = removed, ExpiresAt = Time.unscaledTime + ReservationTtlSeconds
             };
 
             state.Revision++;
@@ -208,20 +140,13 @@ public sealed class TerminalAuthorityService
             RememberOperation(state, request.OperationId);
             var snapshot = BuildSnapshot(state);
             deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
-            _trace.Info("AUTH", $"Reserve success sender={sender} token={token} reserved={removed} rev={state.Revision} {_trace.SnapshotSummary(snapshot)}");
 
             result = new ReserveWithdrawResultDto
             {
-                RequestId = request.RequestId,
-                Success = true,
-                TokenId = token,
-                Key = request.Key,
-                ReservedAmount = removed,
-                Revision = state.Revision,
-                Snapshot = snapshot
+                RequestId = request.RequestId, Success = true, TokenId = token, Key = request.Key,
+                ReservedAmount = removed, Revision = state.Revision, Snapshot = snapshot
             };
         }
-
         EmitDeltas(deltas);
         return result;
     }
@@ -230,53 +155,33 @@ public sealed class TerminalAuthorityService
     {
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Commit sender={sender} req={request.RequestId} op={request.OperationId} term={request.TerminalUid} token={request.TokenId}");
+            _trace.Info("AUTH", $"Commit sender={sender} token={request.TokenId}");
             var state = GetState(request.TerminalUid);
-            if (state == null)
-            {
-                return ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Session not found", operationType: "commit");
-            }
+            if (state == null) return ApplyFailure(request.RequestId, request.TokenId ?? "", "Session not found", operationType: "commit");
 
             if (IsDuplicateOperation(state, request.OperationId))
-            {
-                return new ApplyResultDto
-                {
-                    RequestId = request.RequestId,
-                    Success = true,
-                    TokenId = request.TokenId ?? string.Empty,
-                    Reason = "Duplicate operation ignored",
-                    OperationType = "commit",
-                    Revision = state.Revision,
-                    Snapshot = BuildSnapshot(state)
-                };
-            }
+                return new ApplyResultDto { RequestId = request.RequestId, Success = true, TokenId = request.TokenId ?? "", Reason = "Duplicate", OperationType = "commit", Revision = state.Revision, Snapshot = BuildSnapshot(state) };
 
-            if (!state.Reservations.TryGetValue(request.TokenId ?? string.Empty, out var reservation))
+            if (!state.Reservations.TryGetValue(request.TokenId ?? "", out var reservation))
             {
                 RememberOperation(state, request.OperationId);
-                return ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Reservation not found", BuildSnapshot(state), state.Revision, "commit");
+                return ApplyFailure(request.RequestId, request.TokenId ?? "", "Reservation not found", BuildSnapshot(state), state.Revision, "commit");
             }
 
             if (reservation.PeerId != sender)
             {
                 RememberOperation(state, request.OperationId);
-                return ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Reservation owner mismatch", BuildSnapshot(state), state.Revision, "commit");
+                return ApplyFailure(request.RequestId, request.TokenId ?? "", "Reservation owner mismatch", BuildSnapshot(state), state.Revision, "commit");
             }
 
             var applied = reservation.Amount;
             state.Reservations.Remove(reservation.TokenId);
             RememberOperation(state, request.OperationId);
-            _trace.Info("AUTH", $"Commit success sender={sender} token={reservation.TokenId} applied={applied} rev={state.Revision}");
 
             return new ApplyResultDto
             {
-                RequestId = request.RequestId,
-                Success = true,
-                OperationType = "commit",
-                TokenId = reservation.TokenId,
-                AppliedAmount = applied,
-                Revision = state.Revision,
-                Snapshot = BuildSnapshot(state)
+                RequestId = request.RequestId, Success = true, OperationType = "commit",
+                TokenId = reservation.TokenId, AppliedAmount = applied, Revision = state.Revision, Snapshot = BuildSnapshot(state)
             };
         }
     }
@@ -287,64 +192,39 @@ public sealed class TerminalAuthorityService
         ApplyResultDto result;
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Cancel sender={sender} req={request.RequestId} op={request.OperationId} term={request.TerminalUid} token={request.TokenId} amount={request.Amount} player={request.PlayerId}");
+            _trace.Info("AUTH", $"Cancel sender={sender} token={request.TokenId} amount={request.Amount}");
             var state = GetState(request.TerminalUid);
-            if (state == null)
-            {
-                return ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Session not found", operationType: "cancel");
-            }
+            if (state == null) return ApplyFailure(request.RequestId, request.TokenId ?? "", "Session not found", operationType: "cancel");
 
             if (IsDuplicateOperation(state, request.OperationId))
-            {
-                return new ApplyResultDto
-                {
-                    RequestId = request.RequestId,
-                    Success = true,
-                    TokenId = request.TokenId ?? string.Empty,
-                    Reason = "Duplicate operation ignored",
-                    OperationType = "cancel",
-                    Revision = state.Revision,
-                    Snapshot = BuildSnapshot(state)
-                };
-            }
+                return new ApplyResultDto { RequestId = request.RequestId, Success = true, TokenId = request.TokenId ?? "", Reason = "Duplicate", OperationType = "cancel", Revision = state.Revision, Snapshot = BuildSnapshot(state) };
 
-            if (!state.Reservations.TryGetValue(request.TokenId ?? string.Empty, out var reservation))
+            if (!state.Reservations.TryGetValue(request.TokenId ?? "", out var reservation))
             {
                 RememberOperation(state, request.OperationId);
-                return ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Reservation not found", BuildSnapshot(state), state.Revision, "cancel");
+                return ApplyFailure(request.RequestId, request.TokenId ?? "", "Reservation not found", BuildSnapshot(state), state.Revision, "cancel");
             }
 
             if (reservation.PeerId != sender)
             {
                 RememberOperation(state, request.OperationId);
-                return ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Reservation owner mismatch", BuildSnapshot(state), state.Revision, "cancel");
+                return ApplyFailure(request.RequestId, request.TokenId ?? "", "Reservation owner mismatch", BuildSnapshot(state), state.Revision, "cancel");
             }
 
             var cancelAmount = request.Amount > 0 ? Math.Min(request.Amount, reservation.Amount) : reservation.Amount;
             if (!TryGetMappedPlayerId(state, sender, request.PlayerId, out var playerId))
             {
                 RememberOperation(state, request.OperationId);
-                result = ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Player identity mismatch", BuildSnapshot(state), state.Revision, "cancel");
-                return result;
+                return ApplyFailure(request.RequestId, request.TokenId ?? "", "Player identity mismatch", BuildSnapshot(state), state.Revision, "cancel");
             }
 
             var player = FindPlayerById(playerId);
             var restored = AddToChests(state, reservation.Key, cancelAmount, player);
             var unresolved = cancelAmount - restored;
-            if (unresolved > 0)
-            {
-                DropNearTerminal(state, reservation.Key, unresolved);
-            }
+            if (unresolved > 0) DropNearTerminal(state, reservation.Key, unresolved);
 
             reservation.Amount -= cancelAmount;
-            if (reservation.Amount <= 0)
-            {
-                state.Reservations.Remove(reservation.TokenId);
-            }
-            else
-            {
-                state.Reservations[reservation.TokenId] = reservation;
-            }
+            if (reservation.Amount <= 0) state.Reservations.Remove(reservation.TokenId);
 
             if (restored > 0 || unresolved > 0)
             {
@@ -353,24 +233,13 @@ public sealed class TerminalAuthorityService
                 var snapshot = BuildSnapshot(state);
                 deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
                 RememberOperation(state, request.OperationId);
-                result = new ApplyResultDto
-                {
-                    RequestId = request.RequestId,
-                    Success = true,
-                    OperationType = "cancel",
-                    TokenId = request.TokenId ?? string.Empty,
-                    AppliedAmount = cancelAmount,
-                    Revision = state.Revision,
-                    Snapshot = snapshot
-                };
-                _trace.Info("AUTH", $"Cancel success sender={sender} token={request.TokenId} cancel={cancelAmount} restored={restored} dropped={unresolved} rev={state.Revision}");
+                result = new ApplyResultDto { RequestId = request.RequestId, Success = true, OperationType = "cancel", TokenId = request.TokenId ?? "", AppliedAmount = cancelAmount, Revision = state.Revision, Snapshot = snapshot };
                 goto EmitAndReturn;
             }
 
             RememberOperation(state, request.OperationId);
-            result = ApplyFailure(request.RequestId, request.TokenId ?? string.Empty, "Nothing restored", BuildSnapshot(state), state.Revision, "cancel");
+            result = ApplyFailure(request.RequestId, request.TokenId ?? "", "Nothing restored", BuildSnapshot(state), state.Revision, "cancel");
         }
-
     EmitAndReturn:
         EmitDeltas(deltas);
         return result;
@@ -382,57 +251,40 @@ public sealed class TerminalAuthorityService
         ApplyResultDto result;
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Deposit sender={sender} req={request.RequestId} op={request.OperationId} session={request.SessionId} term={request.TerminalUid} key={StorageTrace.Item(request.Key)} amount={request.Amount} expectedRev={request.ExpectedRevision} player={request.PlayerId}");
+            _trace.Info("AUTH", $"Deposit sender={sender} key={StorageTrace.Item(request.Key)} amount={request.Amount}");
             var state = GetState(request.TerminalUid);
-            if (state == null)
-            {
-                return ApplyFailure(request.RequestId, string.Empty, "Session not found", operationType: "deposit");
-            }
+            if (state == null) return ApplyFailure(request.RequestId, "", "Session not found", operationType: "deposit");
 
             if (IsDuplicateOperation(state, request.OperationId))
-            {
-                return new ApplyResultDto
-                {
-                    RequestId = request.RequestId,
-                    Success = true,
-                    Reason = "Duplicate operation ignored",
-                    OperationType = "deposit",
-                    Revision = state.Revision,
-                    Snapshot = BuildSnapshot(state)
-                };
-            }
+                return new ApplyResultDto { RequestId = request.RequestId, Success = true, Reason = "Duplicate", OperationType = "deposit", Revision = state.Revision, Snapshot = BuildSnapshot(state) };
 
             if (request.ExpectedRevision >= 0 && request.ExpectedRevision != state.Revision)
-            {
-                return ApplyFailure(request.RequestId, string.Empty, "Conflict", BuildSnapshot(state), state.Revision, "deposit");
-            }
+                return ApplyFailure(request.RequestId, "", "Conflict", BuildSnapshot(state), state.Revision, "deposit");
 
             if (!TryGetMappedPlayerId(state, sender, request.PlayerId, out var playerId))
             {
                 RememberOperation(state, request.OperationId);
-                return ApplyFailure(request.RequestId, string.Empty, "Player identity mismatch", BuildSnapshot(state), state.Revision, "deposit");
+                return ApplyFailure(request.RequestId, "", "Player identity mismatch", BuildSnapshot(state), state.Revision, "deposit");
             }
 
             var player = FindPlayerById(playerId);
             if (player == null)
             {
                 RememberOperation(state, request.OperationId);
-                return ApplyFailure(request.RequestId, string.Empty, "Player not found", BuildSnapshot(state), state.Revision, "deposit");
+                return ApplyFailure(request.RequestId, "", "Player not found", BuildSnapshot(state), state.Revision, "deposit");
             }
 
             var removedAmount = RemoveFromPlayerInventory(player, request.Key, request.Amount);
-            var removedSource = "player";
             if (removedAmount <= 0)
             {
                 var terminal = FindTerminalByUid(state.TerminalUid);
                 removedAmount = RemoveFromTerminalInventory(terminal, request.Key, request.Amount);
-                removedSource = "terminal";
             }
 
             if (removedAmount <= 0)
             {
                 RememberOperation(state, request.OperationId);
-                return ApplyFailure(request.RequestId, string.Empty, "Player/terminal has no matching item", BuildSnapshot(state), state.Revision, "deposit");
+                return ApplyFailure(request.RequestId, "", "Player/terminal has no matching item", BuildSnapshot(state), state.Revision, "deposit");
             }
 
             var stored = AddToChests(state, request.Key, removedAmount, player);
@@ -441,38 +293,21 @@ public sealed class TerminalAuthorityService
             {
                 var restored = AddToPlayerInventory(player, request.Key, notStored);
                 var unresolved = notStored - restored;
-                if (unresolved > 0)
-                {
-                    DropNearTerminal(state, request.Key, unresolved);
-                }
+                if (unresolved > 0) DropNearTerminal(state, request.Key, unresolved);
             }
 
-            if (stored > 0)
-            {
-                MarkSnapshotDirty(state);
-                state.Revision++;
-            }
-
+            if (stored > 0) { MarkSnapshotDirty(state); state.Revision++; }
             RememberOperation(state, request.OperationId);
             var snapshot = BuildSnapshot(state);
-            if (stored > 0)
-            {
-                deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
-            }
+            if (stored > 0) deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
 
             result = new ApplyResultDto
             {
-                RequestId = request.RequestId,
-                Success = stored > 0,
-                Reason = stored > 0 ? string.Empty : "No storage space",
-                OperationType = "deposit",
-                AppliedAmount = stored,
-                Revision = state.Revision,
-                Snapshot = snapshot
+                RequestId = request.RequestId, Success = stored > 0,
+                Reason = stored > 0 ? "" : "No storage space", OperationType = "deposit",
+                AppliedAmount = stored, Revision = state.Revision, Snapshot = snapshot
             };
-            _trace.Info("AUTH", $"Deposit result sender={sender} removed={removedAmount} source={removedSource} stored={stored} notStored={notStored} success={result.Success} reason={result.Reason} rev={state.Revision}");
         }
-
         EmitDeltas(deltas);
         return result;
     }
@@ -482,21 +317,15 @@ public sealed class TerminalAuthorityService
         List<(IReadOnlyCollection<long> Peers, SessionDeltaDto Delta)> deltas = new();
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Close sender={sender} req={request.RequestId} session={request.SessionId} term={request.TerminalUid} player={request.PlayerId}");
+            _trace.Info("AUTH", $"Close sender={sender} session={request.SessionId} term={request.TerminalUid}");
             var state = GetState(request.TerminalUid);
-            if (state == null)
-            {
-                return;
-            }
+            if (state == null) return;
 
             state.PeerPlayerIds.TryGetValue(sender, out var mappedPlayerId);
             state.Subscribers.Remove(sender);
             state.PeerPlayerIds.Remove(sender);
 
-            var cancelledReservations = state.Reservations.Values
-                .Where(r => r.PeerId == sender)
-                .ToList();
-
+            var cancelledReservations = state.Reservations.Values.Where(r => r.PeerId == sender).ToList();
             var effectivePlayerId = mappedPlayerId > 0 ? mappedPlayerId : request.PlayerId;
             var player = FindPlayerById(effectivePlayerId);
             var anyChanged = false;
@@ -504,11 +333,7 @@ public sealed class TerminalAuthorityService
             {
                 var restored = AddToChests(state, reservation.Key, reservation.Amount, player);
                 var unresolved = reservation.Amount - restored;
-                if (unresolved > 0)
-                {
-                    DropNearTerminal(state, reservation.Key, unresolved);
-                }
-
+                if (unresolved > 0) DropNearTerminal(state, reservation.Key, unresolved);
                 state.Reservations.Remove(reservation.TokenId);
                 anyChanged = anyChanged || restored > 0 || unresolved > 0;
             }
@@ -519,164 +344,60 @@ public sealed class TerminalAuthorityService
                 state.Revision++;
                 var snapshot = BuildSnapshot(state);
                 deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
-                _trace.Info("AUTH", $"Close restored reservations sender={sender} rev={state.Revision} {_trace.SnapshotSummary(snapshot)}");
             }
 
             if (state.Subscribers.Count == 0 && state.Reservations.Count == 0)
-            {
                 _states.Remove(state.TerminalUid);
-            }
         }
-
         EmitDeltas(deltas);
-    }
-
-    private static ReserveWithdrawResultDto ReserveFailure(
-        ReserveWithdrawRequestDto request,
-        string reason,
-        SessionSnapshotDto? snapshot = null,
-        long revision = 0)
-    {
-        return new ReserveWithdrawResultDto
-        {
-            RequestId = request.RequestId,
-            Success = false,
-            Reason = reason,
-            Key = request.Key,
-            ReservedAmount = 0,
-            Revision = revision,
-            Snapshot = snapshot ?? new SessionSnapshotDto()
-        };
-    }
-
-    private static ApplyResultDto ApplyFailure(
-        string requestId,
-        string tokenId,
-        string reason,
-        SessionSnapshotDto? snapshot = null,
-        long revision = 0,
-        string operationType = "")
-    {
-        return new ApplyResultDto
-        {
-            RequestId = requestId,
-            Success = false,
-            Reason = reason,
-            OperationType = operationType ?? string.Empty,
-            TokenId = tokenId ?? string.Empty,
-            Revision = revision,
-            Snapshot = snapshot ?? new SessionSnapshotDto()
-        };
-    }
-
-    private TerminalState GetOrCreateState(OpenSessionRequestDto request)
-    {
-        if (_states.TryGetValue(request.TerminalUid, out var existing))
-        {
-            var requestedAnchor = new Vector3(request.AnchorX, request.AnchorY, request.AnchorZ);
-            if ((existing.AnchorPosition - requestedAnchor).sqrMagnitude > 0.0001f
-                || !Mathf.Approximately(existing.Radius, request.Radius))
-            {
-                existing.AnchorPosition = requestedAnchor;
-                existing.Radius = request.Radius;
-                MarkSnapshotDirty(existing);
-            }
-
-            _trace.Verbose("AUTH", $"GetState existing term={existing.TerminalUid} session={existing.SessionId} radius={existing.Radius:0.0}");
-            return existing;
-        }
-
-        var created = new TerminalState
-        {
-            TerminalUid = request.TerminalUid,
-            SessionId = Guid.NewGuid().ToString("N"),
-            AnchorPosition = new Vector3(request.AnchorX, request.AnchorY, request.AnchorZ),
-            Radius = request.Radius
-        };
-        _states[request.TerminalUid] = created;
-        _trace.Info("AUTH", $"GetState created term={created.TerminalUid} session={created.SessionId} radius={created.Radius:0.0}");
-        return created;
-    }
-
-    private TerminalState? GetState(string terminalUid)
-    {
-        if (string.IsNullOrWhiteSpace(terminalUid))
-        {
-            return null;
-        }
-
-        return _states.TryGetValue(terminalUid, out var state) ? state : null;
     }
 
     private SessionSnapshotDto BuildSnapshot(TerminalState state)
     {
         var now = Time.unscaledTime;
-        if (!state.SnapshotDirty
-            && state.CachedSnapshot != null
-            && now - state.CachedSnapshotAt <= SnapshotCacheSeconds)
-        {
+        if (!state.SnapshotDirty && state.CachedSnapshot != null && now - state.CachedSnapshotAt <= SnapshotCacheSeconds)
             return state.CachedSnapshot;
-        }
 
         RefreshChestHandles(state);
 
-        var totals = new Dictionary<ItemKey, int>();
-        var sourceCounts = new Dictionary<ItemKey, int>();
+        var sourceStacks = new List<SourceStack>();
         var prototypes = new Dictionary<ItemKey, ItemDrop.ItemData>();
         var slotsTotal = 0;
         foreach (var chest in state.Chests)
         {
             var inventory = chest.Container.GetInventory();
-            if (inventory == null)
-            {
-                continue;
-            }
+            if (inventory == null) continue;
+            slotsTotal += ReflectionHelpers.GetInventoryWidth(inventory) * ReflectionHelpers.GetInventoryHeight(inventory);
 
-            slotsTotal += GetInventoryWidth(inventory) * GetInventoryHeight(inventory);
-            var seenInChest = new HashSet<ItemKey>();
             foreach (var item in inventory.GetAllItems())
             {
-                if (item?.m_dropPrefab == null || item.m_stack <= 0)
-                {
-                    continue;
-                }
-
+                if (item?.m_dropPrefab == null || item.m_stack <= 0) continue;
                 var key = new ItemKey(item.m_dropPrefab.name, item.m_quality, item.m_variant);
-                totals[key] = totals.TryGetValue(key, out var existing) ? existing + item.m_stack : item.m_stack;
-                if (!prototypes.ContainsKey(key))
-                {
-                    prototypes[key] = item.Clone();
-                }
+                if (!prototypes.ContainsKey(key)) prototypes[key] = item.Clone();
 
-                if (seenInChest.Add(key))
+                sourceStacks.Add(new SourceStack
                 {
-                    sourceCounts[key] = sourceCounts.TryGetValue(key, out var sources) ? sources + 1 : 1;
-                }
+                    Key = key, DisplayName = item.m_shared.m_name,
+                    Amount = item.m_stack, StackSize = item.m_shared.m_maxStackSize,
+                    Distance = chest.Distance, SourceId = chest.SourceId
+                });
             }
         }
 
-        var items = totals
-            .Where(kvp => kvp.Value > 0)
-            .Select(kvp => new
+        var aggregated = AggregationService.Aggregate(sourceStacks, ReflectionHelpers.ResolveMaxStackSize);
+
+        var orderedItems = aggregated
+            .Select(a => new
             {
-                Key = kvp.Key,
-                Total = kvp.Value,
-                Display = GetDisplayName(kvp.Key, prototypes),
-                Type = GetItemTypeOrder(kvp.Key, prototypes),
-                Subgroup = GetSubgroupOrder(kvp.Key)
+                Item = a,
+                TypeOrder = prototypes.TryGetValue(a.Key, out var p) ? (int)p.m_shared.m_itemType : int.MaxValue,
+                SubgroupOrder = ReflectionHelpers.GetSubgroupOrder(a.Key)
             })
-            .OrderBy(x => x.Type)
-            .ThenBy(x => x.Subgroup)
-            .ThenBy(x => x.Display, StringComparer.OrdinalIgnoreCase)
-            .ThenByDescending(x => x.Total)
-            .Select(x => new AggregatedItem
-            {
-                Key = x.Key,
-                DisplayName = x.Display,
-                TotalAmount = x.Total,
-                SourceCount = sourceCounts.TryGetValue(x.Key, out var sourceCount) ? sourceCount : 0,
-                StackSize = 999
-            })
+            .OrderBy(x => x.TypeOrder)
+            .ThenBy(x => x.SubgroupOrder)
+            .ThenBy(x => x.Item.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(x => x.Item.TotalAmount)
+            .Select(x => x.Item)
             .ToList();
 
         state.ChestCount = state.Chests.Count;
@@ -684,371 +405,175 @@ public sealed class TerminalAuthorityService
 
         var snapshot = new SessionSnapshotDto
         {
-            SessionId = state.SessionId,
-            TerminalUid = state.TerminalUid,
-            Revision = state.Revision,
-            SlotsTotalPhysical = slotsTotal,
-            SlotsUsedVirtual = items.Sum(i => (int)Math.Ceiling(i.TotalAmount / 999f)),
-            ChestCount = state.ChestCount,
-            Items = items
+            SessionId = state.SessionId, TerminalUid = state.TerminalUid,
+            Revision = state.Revision, SlotsTotalPhysical = slotsTotal,
+            SlotsUsedVirtual = AggregationService.CalculateVirtualSlots(orderedItems),
+            ChestCount = state.ChestCount, Items = orderedItems
         };
 
         state.CachedSnapshot = snapshot;
         state.CachedSnapshotAt = now;
         state.SnapshotDirty = false;
-        _trace.Verbose("AUTH", $"BuildSnapshot {_trace.SnapshotSummary(snapshot)}");
         return snapshot;
-    }
-
-    private static void MarkSnapshotDirty(TerminalState state)
-    {
-        state.SnapshotDirty = true;
-        state.CachedSnapshot = null;
     }
 
     private void RefreshChestHandles(TerminalState state)
     {
         var terminal = FindTerminalByUid(state.TerminalUid);
-        if (terminal != null)
-        {
-            state.AnchorPosition = terminal.transform.position;
-        }
-
-        state.Chests = _scanner
-            .GetNearbyContainers(state.AnchorPosition, state.Radius, terminal, onlyVanillaChests: true)
-            .ToList();
-        _trace.Info("AUTH", $"RefreshChests term={state.TerminalUid} radius={state.Radius:0.0} count={state.Chests.Count}");
-        if (_trace.IsVerbose && state.Chests.Count > 0)
-        {
-            var preview = string.Join(", ", state.Chests.Take(16).Select(StorageTrace.Chest));
-            _trace.Verbose("AUTH", $"RefreshChests list: {preview}");
-        }
+        if (terminal != null) state.AnchorPosition = terminal.transform.position;
+        state.Chests = _scanner.GetNearbyContainers(state.AnchorPosition, state.Radius, terminal, onlyVanillaChests: true).ToList();
     }
 
     private int RemoveFromChests(TerminalState state, ItemKey key, int amount, Player? player)
     {
-        if (amount <= 0)
-        {
-            return 0;
-        }
-
+        if (amount <= 0) return 0;
         var remaining = amount;
         foreach (var chest in state.Chests.OrderBy(c => c.Distance).ThenBy(c => c.SourceId, StringComparer.Ordinal))
         {
-            if (remaining <= 0)
-            {
-                break;
-            }
-
+            if (remaining <= 0) break;
             var inv = chest.Container.GetInventory();
-            if (inv == null)
-            {
-                continue;
-            }
+            if (inv == null) continue;
+            if (_config.RequireAccessCheck.Value && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
 
-            if (_config.RequireAccessCheck.Value && player != null && !CanAccess(chest.Container, player))
+            foreach (var item in inv.GetAllItems().Where(i => ReflectionHelpers.MatchKey(i, key)).ToList())
             {
-                continue;
-            }
-
-            foreach (var item in inv.GetAllItems().Where(i => MatchKey(i, key)).ToList())
-            {
-                if (remaining <= 0)
-                {
-                    break;
-                }
-
+                if (remaining <= 0) break;
                 var take = Math.Min(item.m_stack, remaining);
                 inv.RemoveItem(item, take);
                 remaining -= take;
-                _trace.Verbose("AUTH", $"RemoveFromChests term={state.TerminalUid} chest={chest.SourceId} key={StorageTrace.Item(key)} took={take} remaining={remaining}");
             }
         }
-
         return amount - remaining;
     }
 
     private int AddToChests(TerminalState state, ItemKey key, int amount, Player? player)
     {
-        if (amount <= 0)
-        {
-            return 0;
-        }
-
+        if (amount <= 0) return 0;
+        var maxStack = ReflectionHelpers.GetMaxStackSize(key);
+        if (maxStack <= 0) maxStack = 1;
         var remaining = amount;
         foreach (var chest in state.Chests.OrderBy(c => c.Distance).ThenBy(c => c.SourceId, StringComparer.Ordinal))
         {
-            if (remaining <= 0)
-            {
-                break;
-            }
-
+            if (remaining <= 0) break;
             var inv = chest.Container.GetInventory();
-            if (inv == null)
-            {
-                continue;
-            }
+            if (inv == null) continue;
+            if (_config.RequireAccessCheck.Value && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
 
-            if (_config.RequireAccessCheck.Value && player != null && !CanAccess(chest.Container, player))
+            var movedInChest = ChunkedTransfer.Move(remaining, maxStack, chunkAmount =>
             {
-                continue;
-            }
-
-            var movedInChest = ChunkedTransfer.Move(remaining, 999, chunkAmount =>
-            {
-                var stack = CreateItemStack(key, chunkAmount);
-                if (stack == null)
-                {
-                    return 0;
-                }
-
-                return TryAddItemMeasured(inv, key, stack, chunkAmount);
+                var stack = ReflectionHelpers.CreateItemStack(key, chunkAmount);
+                if (stack == null) return 0;
+                return ReflectionHelpers.TryAddItemMeasured(inv, key, stack, chunkAmount);
             });
-
             remaining -= movedInChest;
-            if (movedInChest > 0)
-            {
-                _trace.Verbose("AUTH", $"AddToChests term={state.TerminalUid} chest={chest.SourceId} key={StorageTrace.Item(key)} moved={movedInChest} remaining={remaining}");
-            }
         }
-
         return amount - remaining;
     }
 
     private static int RemoveFromPlayerInventory(Player player, ItemKey key, int amount)
     {
-        if (amount <= 0)
-        {
-            return 0;
-        }
-
-        var removed = 0;
+        if (amount <= 0) return 0;
         var remaining = amount;
         var inventory = player.GetInventory();
-        foreach (var item in inventory.GetAllItems().Where(i => MatchKey(i, key)).ToList())
+        foreach (var item in inventory.GetAllItems().Where(i => ReflectionHelpers.MatchKey(i, key)).ToList())
         {
-            if (remaining <= 0)
-            {
-                break;
-            }
-
+            if (remaining <= 0) break;
             var take = Math.Min(item.m_stack, remaining);
             inventory.RemoveItem(item, take);
-            removed += take;
             remaining -= take;
         }
-
-        return removed;
+        return amount - remaining;
     }
 
     private static int RemoveFromTerminalInventory(Container? terminal, ItemKey key, int amount)
     {
-        if (terminal == null || amount <= 0)
-        {
-            return 0;
-        }
-
+        if (terminal == null || amount <= 0) return 0;
         var inventory = terminal.GetInventory();
-        if (inventory == null)
-        {
-            return 0;
-        }
-
-        var removed = 0;
+        if (inventory == null) return 0;
         var remaining = amount;
-        foreach (var item in inventory.GetAllItems().Where(i => MatchKey(i, key)).ToList())
+        foreach (var item in inventory.GetAllItems().Where(i => ReflectionHelpers.MatchKey(i, key)).ToList())
         {
-            if (remaining <= 0)
-            {
-                break;
-            }
-
+            if (remaining <= 0) break;
             var take = Math.Min(item.m_stack, remaining);
             inventory.RemoveItem(item, take);
-            removed += take;
             remaining -= take;
         }
-
-        return removed;
+        return amount - remaining;
     }
 
     private int AddToPlayerInventory(Player player, ItemKey key, int amount)
     {
-        if (amount <= 0)
-        {
-            return 0;
-        }
-
+        if (amount <= 0) return 0;
+        var maxStack = ReflectionHelpers.GetMaxStackSize(key);
+        if (maxStack <= 0) maxStack = 1;
         var inventory = player.GetInventory();
-        return ChunkedTransfer.Move(amount, 999, chunkAmount =>
+        return ChunkedTransfer.Move(amount, maxStack, chunkAmount =>
         {
-            var stack = CreateItemStack(key, chunkAmount);
-            if (stack == null)
-            {
-                return 0;
-            }
-
-            return TryAddItemMeasured(inventory, key, stack, chunkAmount);
+            var stack = ReflectionHelpers.CreateItemStack(key, chunkAmount);
+            if (stack == null) return 0;
+            return ReflectionHelpers.TryAddItemMeasured(inventory, key, stack, chunkAmount);
         });
     }
 
-    private static int TryAddItemMeasured(Inventory inventory, ItemKey key, ItemDrop.ItemData stack, int requestedAmount)
+    private void DropNearTerminal(TerminalState state, ItemKey key, int amount)
     {
-        var before = GetTotalAmount(inventory, key);
-        inventory.AddItem(stack);
-        var after = GetTotalAmount(inventory, key);
-        return ChunkedTransfer.ClampMeasuredMove(requestedAmount, before, after);
+        var maxStack = ReflectionHelpers.GetMaxStackSize(key);
+        if (maxStack <= 0) maxStack = 1;
+        var remaining = amount;
+        while (remaining > 0)
+        {
+            var stackAmount = Math.Min(maxStack, remaining);
+            var stack = ReflectionHelpers.CreateItemStack(key, stackAmount);
+            if (stack == null) break;
+            if (!ReflectionHelpers.TryDropItem(stack, stackAmount, state.AnchorPosition + Vector3.up, Quaternion.identity)) break;
+            remaining -= stackAmount;
+        }
     }
 
-    private static int GetTotalAmount(Inventory inventory, ItemKey key)
+    private static Container? FindTerminalByUid(string terminalUid)
     {
-        var total = 0;
-        foreach (var item in inventory.GetAllItems())
+        if (string.IsNullOrWhiteSpace(terminalUid)) return null;
+        foreach (var container in UnityEngine.Object.FindObjectsByType<Container>(FindObjectsSortMode.None))
         {
-            if (MatchKey(item, key))
-            {
-                total += item.m_stack;
-            }
+            if (container == null || !UnifiedTerminal.IsTerminal(container)) continue;
+            if (string.Equals(ReflectionHelpers.BuildContainerUid(container), terminalUid, StringComparison.Ordinal))
+                return container;
         }
-
-        return total;
-    }
-
-    private static bool MatchKey(ItemDrop.ItemData item, ItemKey key)
-    {
-        return item?.m_dropPrefab != null
-               && item.m_dropPrefab.name == key.PrefabName
-               && item.m_quality == key.Quality
-               && item.m_variant == key.Variant
-               && item.m_stack > 0;
-    }
-
-    private static bool CanAccess(Container container, Player player)
-    {
-        var method = typeof(Container).GetMethod("CheckAccess", BindingFlags.Instance | BindingFlags.Public);
-        if (method == null)
-        {
-            return true;
-        }
-
-        var parameters = method.GetParameters();
-        if (parameters.Length == 1 && parameters[0].ParameterType == typeof(long))
-        {
-            return (bool)method.Invoke(container, new object[] { player.GetPlayerID() });
-        }
-
-        if (parameters.Length == 0)
-        {
-            return (bool)method.Invoke(container, null);
-        }
-
-        return true;
-    }
-
-    private static int GetInventoryWidth(Inventory inventory)
-    {
-        var widthMethod = typeof(Inventory).GetMethod("GetWidth", BindingFlags.Instance | BindingFlags.Public);
-        if (widthMethod != null && widthMethod.Invoke(inventory, null) is int width)
-        {
-            return width;
-        }
-
-        var widthField = typeof(Inventory).GetField("m_width", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        return widthField?.GetValue(inventory) is int fieldWidth ? fieldWidth : 1;
-    }
-
-    private static int GetInventoryHeight(Inventory inventory)
-    {
-        var heightMethod = typeof(Inventory).GetMethod("GetHeight", BindingFlags.Instance | BindingFlags.Public);
-        if (heightMethod != null && heightMethod.Invoke(inventory, null) is int height)
-        {
-            return height;
-        }
-
-        var heightField = typeof(Inventory).GetField("m_height", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        return heightField?.GetValue(inventory) is int fieldHeight ? fieldHeight : 1;
-    }
-
-    private static string GetDisplayName(ItemKey key, IReadOnlyDictionary<ItemKey, ItemDrop.ItemData> prototypes)
-    {
-        if (prototypes.TryGetValue(key, out var item))
-        {
-            return item.m_shared.m_name;
-        }
-
-        var prefab = ObjectDB.instance?.GetItemPrefab(key.PrefabName);
-        var drop = prefab?.GetComponent<ItemDrop>();
-        if (drop?.m_itemData != null)
-        {
-            return drop.m_itemData.m_shared.m_name;
-        }
-
-        return key.PrefabName;
-    }
-
-    private static int GetItemTypeOrder(ItemKey key, IReadOnlyDictionary<ItemKey, ItemDrop.ItemData> prototypes)
-    {
-        if (prototypes.TryGetValue(key, out var item))
-        {
-            return (int)item.m_shared.m_itemType;
-        }
-
-        return int.MaxValue;
-    }
-
-    private static int GetSubgroupOrder(ItemKey key)
-    {
-        if (string.IsNullOrWhiteSpace(key.PrefabName))
-        {
-            return 999;
-        }
-
-        var prefab = key.PrefabName.ToLowerInvariant();
-        if (prefab.Contains("ore") || prefab.Contains("scrap") || prefab.Contains("metal") || prefab.Contains("ingot") || prefab.Contains("bar"))
-        {
-            return 10;
-        }
-
-        if (prefab.Contains("wood") || prefab.Contains("stone"))
-        {
-            return 20;
-        }
-
-        if (prefab.Contains("hide") || prefab.Contains("leather") || prefab.Contains("scale") || prefab.Contains("chitin"))
-        {
-            return 30;
-        }
-
-        if (prefab.Contains("food") || prefab.Contains("mead") || prefab.Contains("stew") || prefab.Contains("soup") || prefab.Contains("bread"))
-        {
-            return 40;
-        }
-
-        return 100;
-    }
-
-    private static Player? FindPlayerById(long playerId)
-    {
-        if (playerId <= 0)
-        {
-            return Player.m_localPlayer;
-        }
-
-        foreach (var player in Player.GetAllPlayers())
-        {
-            if (player != null && player.GetPlayerID() == playerId)
-            {
-                return player;
-            }
-        }
-
-        if (Player.m_localPlayer != null && Player.m_localPlayer.GetPlayerID() == playerId)
-        {
-            return Player.m_localPlayer;
-        }
-
         return null;
     }
+
+    private static void MarkSnapshotDirty(TerminalState state) { state.SnapshotDirty = true; state.CachedSnapshot = null; }
+
+    private TerminalState GetOrCreateState(OpenSessionRequestDto request)
+    {
+        if (_states.TryGetValue(request.TerminalUid, out var existing))
+        {
+            var anchor = new Vector3(request.AnchorX, request.AnchorY, request.AnchorZ);
+            if ((existing.AnchorPosition - anchor).sqrMagnitude > 0.0001f || !Mathf.Approximately(existing.Radius, request.Radius))
+            {
+                existing.AnchorPosition = anchor;
+                existing.Radius = request.Radius;
+                MarkSnapshotDirty(existing);
+            }
+            return existing;
+        }
+        var created = new TerminalState
+        {
+            TerminalUid = request.TerminalUid, SessionId = Guid.NewGuid().ToString("N"),
+            AnchorPosition = new Vector3(request.AnchorX, request.AnchorY, request.AnchorZ), Radius = request.Radius
+        };
+        _states[request.TerminalUid] = created;
+        return created;
+    }
+
+    private TerminalState? GetState(string terminalUid) =>
+        !string.IsNullOrWhiteSpace(terminalUid) && _states.TryGetValue(terminalUid, out var state) ? state : null;
+
+    private static ReserveWithdrawResultDto ReserveFailure(ReserveWithdrawRequestDto req, string reason, SessionSnapshotDto? snapshot = null, long revision = 0) =>
+        new() { RequestId = req.RequestId, Success = false, Reason = reason, Key = req.Key, Revision = revision, Snapshot = snapshot ?? new() };
+
+    private static ApplyResultDto ApplyFailure(string reqId, string tokenId, string reason, SessionSnapshotDto? snapshot = null, long revision = 0, string operationType = "") =>
+        new() { RequestId = reqId, Success = false, Reason = reason, OperationType = operationType, TokenId = tokenId, Revision = revision, Snapshot = snapshot ?? new() };
 
     private static bool TryResolveAndBindPlayerId(TerminalState state, long sender, long requestedPlayerId, out long resolvedPlayerId)
     {
@@ -1056,261 +581,89 @@ public sealed class TerminalAuthorityService
         var runtimePlayerId = ResolvePlayerIdFromPeer(sender);
         if (runtimePlayerId > 0)
         {
-            if (requestedPlayerId > 0 && requestedPlayerId != runtimePlayerId)
-            {
-                return false;
-            }
-
+            if (requestedPlayerId > 0 && requestedPlayerId != runtimePlayerId) return false;
             state.PeerPlayerIds[sender] = runtimePlayerId;
             resolvedPlayerId = runtimePlayerId;
             return true;
         }
-
         if (state.PeerPlayerIds.TryGetValue(sender, out var mapped))
         {
-            if (requestedPlayerId > 0 && requestedPlayerId != mapped)
-            {
-                return false;
-            }
-
+            if (requestedPlayerId > 0 && requestedPlayerId != mapped) return false;
             resolvedPlayerId = mapped;
             return true;
         }
-
         if (requestedPlayerId > 0 && sender <= 0)
         {
             state.PeerPlayerIds[sender] = requestedPlayerId;
             resolvedPlayerId = requestedPlayerId;
             return true;
         }
-
         return false;
     }
 
     private static bool TryGetMappedPlayerId(TerminalState state, long sender, long requestedPlayerId, out long playerId)
     {
         playerId = 0;
-        if (!state.PeerPlayerIds.TryGetValue(sender, out var mapped))
-        {
-            return false;
-        }
-
-        if (requestedPlayerId > 0 && requestedPlayerId != mapped)
-        {
-            return false;
-        }
-
+        if (!state.PeerPlayerIds.TryGetValue(sender, out var mapped)) return false;
+        if (requestedPlayerId > 0 && requestedPlayerId != mapped) return false;
         playerId = mapped;
         return true;
     }
 
     private static long ResolvePlayerIdFromPeer(long sender)
     {
-        if (sender <= 0)
-        {
-            return Player.m_localPlayer?.GetPlayerID() ?? 0L;
-        }
-
+        if (sender <= 0) return Player.m_localPlayer?.GetPlayerID() ?? 0L;
         foreach (var player in Player.GetAllPlayers())
         {
-            if (player == null)
-            {
-                continue;
-            }
-
+            if (player == null) continue;
             var nview = player.GetComponent<ZNetView>();
             var zdo = nview?.GetZDO();
-            if (zdo == null)
-            {
-                continue;
-            }
-
+            if (zdo == null) continue;
             var zdoType = zdo.GetType();
             var getOwnerMethod = zdoType.GetMethod("GetOwner", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (getOwnerMethod != null && getOwnerMethod.Invoke(zdo, null) is long ownerByMethod && ownerByMethod == sender)
-            {
                 return player.GetPlayerID();
-            }
-
             var ownerField = zdoType.GetField("m_owner", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (ownerField != null && ownerField.GetValue(zdo) is long ownerByField && ownerByField == sender)
-            {
                 return player.GetPlayerID();
-            }
         }
-
         return 0L;
+    }
+
+    private static Player? FindPlayerById(long playerId)
+    {
+        if (playerId <= 0) return Player.m_localPlayer;
+        foreach (var player in Player.GetAllPlayers())
+            if (player != null && player.GetPlayerID() == playerId) return player;
+        if (Player.m_localPlayer != null && Player.m_localPlayer.GetPlayerID() == playerId) return Player.m_localPlayer;
+        return null;
     }
 
     private static bool IsPeerConnected(long peerId)
     {
-        if (peerId <= 0 || ZNet.instance == null)
-        {
-            return true;
-        }
-
+        if (peerId <= 0 || ZNet.instance == null) return true;
         var getPeerMethod = typeof(ZNet).GetMethod("GetPeer", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(long) }, null);
-        if (getPeerMethod != null)
-        {
-            var peer = getPeerMethod.Invoke(ZNet.instance, new object[] { peerId });
-            if (peer != null)
-            {
-                return true;
-            }
-        }
-
+        if (getPeerMethod != null && getPeerMethod.Invoke(ZNet.instance, new object[] { peerId }) != null) return true;
         var peersField = typeof(ZNet).GetField("m_peers", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         if (peersField?.GetValue(ZNet.instance) is System.Collections.IEnumerable peers)
         {
             foreach (var peer in peers)
             {
-                if (peer == null)
-                {
-                    continue;
-                }
-
+                if (peer == null) continue;
                 var uidField = peer.GetType().GetField("m_uid", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                if (uidField?.GetValue(peer) is long uid && uid == peerId)
-                {
-                    return true;
-                }
+                if (uidField?.GetValue(peer) is long uid && uid == peerId) return true;
             }
         }
-
         return false;
     }
 
-    private static string BuildContainerUid(Container container)
-    {
-        var znetView = container.GetComponent<ZNetView>();
-        var zdo = znetView?.GetZDO();
-        if (zdo != null)
-        {
-            return zdo.m_uid.ToString();
-        }
-
-        return container.GetInstanceID().ToString();
-    }
-
-    private static Container? FindTerminalByUid(string terminalUid)
-    {
-        if (string.IsNullOrWhiteSpace(terminalUid))
-        {
-            return null;
-        }
-
-        foreach (var container in UnityEngine.Object.FindObjectsByType<Container>(FindObjectsSortMode.None))
-        {
-            if (container == null || !UnifiedChestTerminalMarker.IsTerminalContainer(container))
-            {
-                continue;
-            }
-
-            if (string.Equals(BuildContainerUid(container), terminalUid, StringComparison.Ordinal))
-            {
-                return container;
-            }
-        }
-
-        return null;
-    }
-
-    private ItemDrop.ItemData? CreateItemStack(ItemKey key, int amount)
-    {
-        var prefab = ObjectDB.instance?.GetItemPrefab(key.PrefabName);
-        var drop = prefab?.GetComponent<ItemDrop>();
-        if (drop?.m_itemData == null)
-        {
-            return null;
-        }
-
-        var clone = drop.m_itemData.Clone();
-        clone.m_quality = key.Quality;
-        clone.m_variant = key.Variant;
-        clone.m_stack = amount;
-        clone.m_shared.m_maxStackSize = Math.Max(clone.m_shared.m_maxStackSize, 999);
-        return clone;
-    }
-
-    private void DropNearTerminal(TerminalState state, ItemKey key, int amount)
-    {
-        var remaining = amount;
-        while (remaining > 0)
-        {
-            var stackAmount = Math.Min(999, remaining);
-            var stack = CreateItemStack(key, stackAmount);
-            if (stack == null)
-            {
-                break;
-            }
-
-            var pos = state.AnchorPosition + Vector3.up;
-            var rot = Quaternion.identity;
-            if (!TryDropItem(stack, stackAmount, pos, rot))
-            {
-                break;
-            }
-
-            remaining -= stackAmount;
-        }
-    }
-
-    private static bool TryDropItem(ItemDrop.ItemData item, int amount, Vector3 position, Quaternion rotation)
-    {
-        var methods = typeof(ItemDrop).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
-            .Where(m => string.Equals(m.Name, "DropItem", StringComparison.Ordinal))
-            .ToList();
-
-        foreach (var method in methods)
-        {
-            var parameters = method.GetParameters();
-            try
-            {
-                if (parameters.Length == 4
-                    && parameters[0].ParameterType == typeof(ItemDrop.ItemData)
-                    && parameters[1].ParameterType == typeof(int)
-                    && parameters[2].ParameterType == typeof(Vector3)
-                    && parameters[3].ParameterType == typeof(Quaternion))
-                {
-                    method.Invoke(null, new object[] { item, amount, position, rotation });
-                    return true;
-                }
-
-                if (parameters.Length == 3
-                    && parameters[0].ParameterType == typeof(ItemDrop.ItemData)
-                    && parameters[1].ParameterType == typeof(int)
-                    && parameters[2].ParameterType == typeof(Vector3))
-                {
-                    method.Invoke(null, new object[] { item, amount, position });
-                    return true;
-                }
-            }
-            catch
-            {
-                // Try next known signature.
-            }
-        }
-
-        return false;
-    }
-
-    private static bool IsDuplicateOperation(TerminalState state, string operationId)
-    {
-        return !string.IsNullOrWhiteSpace(operationId) && state.ProcessedOperations.Contains(operationId);
-    }
+    private static bool IsDuplicateOperation(TerminalState state, string operationId) =>
+        !string.IsNullOrWhiteSpace(operationId) && state.ProcessedOperations.Contains(operationId);
 
     private static void RememberOperation(TerminalState state, string operationId)
     {
-        if (string.IsNullOrWhiteSpace(operationId))
-        {
-            return;
-        }
-
-        if (state.ProcessedOperations.Add(operationId))
-        {
-            state.OperationOrder.Enqueue(operationId);
-        }
-
+        if (string.IsNullOrWhiteSpace(operationId)) return;
+        if (state.ProcessedOperations.Add(operationId)) state.OperationOrder.Enqueue(operationId);
         while (state.OperationOrder.Count > MaxOperationHistory)
         {
             var stale = state.OperationOrder.Dequeue();
@@ -1318,29 +671,15 @@ public sealed class TerminalAuthorityService
         }
     }
 
-    private static SessionDeltaDto BuildDelta(TerminalState state, SessionSnapshotDto snapshot)
-    {
-        return new SessionDeltaDto
-        {
-            SessionId = state.SessionId,
-            TerminalUid = state.TerminalUid,
-            Revision = state.Revision,
-            Snapshot = snapshot
-        };
-    }
+    private static SessionDeltaDto BuildDelta(TerminalState state, SessionSnapshotDto snapshot) =>
+        new() { SessionId = state.SessionId, TerminalUid = state.TerminalUid, Revision = state.Revision, Snapshot = snapshot };
 
     private void EmitDeltas(IEnumerable<(IReadOnlyCollection<long> Peers, SessionDeltaDto Delta)> deltas)
     {
         foreach (var delta in deltas)
         {
-            try
-            {
-                DeltaReady?.Invoke(delta.Peers, delta.Delta);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError($"Failed to emit session delta: {ex}");
-            }
+            try { DeltaReady?.Invoke(delta.Peers, delta.Delta); }
+            catch (Exception ex) { _logger.LogError($"Failed to emit session delta: {ex}"); }
         }
     }
 
