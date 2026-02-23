@@ -34,6 +34,9 @@ public sealed class TerminalSessionService
     private readonly Dictionary<ItemKey, int> _stackSizes = new();
     private readonly List<PendingReservation> _pendingReservations = new();
     private readonly List<PendingDeposit> _pendingDeposits = new();
+    private readonly Dictionary<ItemKey, CachedSortEntry> _sortCache = new();
+    private List<KeyValuePair<ItemKey, int>> _sortedItems = new();
+    private long _lastProjectedContentHash;
 
     private Container? _terminal;
     private Player? _player;
@@ -168,6 +171,7 @@ public sealed class TerminalSessionService
         var normalized = query?.Trim() ?? string.Empty;
         if (string.Equals(normalized, _searchQuery, StringComparison.Ordinal)) return;
         _searchQuery = normalized;
+        _lastProjectedContentHash = 0;
         RefreshTerminalInventoryFromAuthoritative();
         _uiRevision++;
     }
@@ -225,6 +229,9 @@ public sealed class TerminalSessionService
         _displayedTotals.Clear();
         _prototypes.Clear();
         _stackSizes.Clear();
+        _sortCache.Clear();
+        _sortedItems.Clear();
+        _lastProjectedContentHash = 0;
         _slotsTotalPhysical = 0;
         _chestCount = 0;
         _revision = 0;
@@ -307,8 +314,8 @@ public sealed class TerminalSessionService
         _openSessionFailureCount = 0;
         _nextSnapshotRetryAt = Time.unscaledTime + 60f;
 
+        var previousKeyCount = _authoritativeTotals.Count;
         _authoritativeTotals.Clear();
-        _prototypes.Clear();
         _stackSizes.Clear();
         foreach (var item in snapshot.Items)
         {
@@ -329,6 +336,9 @@ public sealed class TerminalSessionService
             }
         }
 
+        if (_authoritativeTotals.Count != previousKeyCount)
+            _sortCache.Clear();
+
         RefreshTrackedChestHandles();
         RefreshTerminalInventoryFromAuthoritative();
         _uiRevision++;
@@ -340,6 +350,10 @@ public sealed class TerminalSessionService
         var inventory = _terminal.GetInventory();
         if (inventory == null) return;
 
+        var contentHash = ComputeContentHash();
+        if (contentHash == _lastProjectedContentHash) return;
+        _lastProjectedContentHash = contentHash;
+
         _isApplyingProjection = true;
         try
         {
@@ -347,23 +361,10 @@ public sealed class TerminalSessionService
             _displayedTotals.Clear();
             var width = Math.Max(1, ReflectionHelpers.GetInventoryWidth(inventory));
 
-            var filtered = _authoritativeTotals
-                .Where(kvp => kvp.Value > 0 && MatchesSearch(GetDisplayName(kvp.Key)))
-                .Select(kvp => new
-                {
-                    Entry = kvp, DisplayName = GetDisplayName(kvp.Key),
-                    TypeOrder = GetItemTypeOrder(kvp.Key),
-                    SubgroupOrder = ReflectionHelpers.GetSubgroupOrder(kvp.Key)
-                })
-                .OrderBy(x => x.TypeOrder)
-                .ThenBy(x => x.SubgroupOrder)
-                .ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
-                .ThenByDescending(x => x.Entry.Value)
-                .Select(x => x.Entry)
-                .ToList();
+            RebuildSortedItems();
 
             var totalVirtualStacks = 0;
-            foreach (var kvp in filtered)
+            foreach (var kvp in _sortedItems)
             {
                 var maxStack = _stackSizes.TryGetValue(kvp.Key, out var s) && s > 0 ? s : 1;
                 totalVirtualStacks += (int)Math.Ceiling(kvp.Value / (double)maxStack);
@@ -375,7 +376,7 @@ public sealed class TerminalSessionService
             ReflectionHelpers.SetInventorySize(inventory, width, _contentRows);
 
             var slotIndex = 0;
-            foreach (var kvp in filtered)
+            foreach (var kvp in _sortedItems)
             {
                 var remaining = kvp.Value;
                 var maxStack = _stackSizes.TryGetValue(kvp.Key, out var ss) && ss > 0 ? ss : 1;
@@ -395,6 +396,57 @@ public sealed class TerminalSessionService
             ReflectionHelpers.NotifyInventoryChanged(inventory);
         }
         finally { _isApplyingProjection = false; }
+    }
+
+    private long ComputeContentHash()
+    {
+        unchecked
+        {
+            long hash = 17;
+            foreach (var kvp in _authoritativeTotals)
+            {
+                hash = hash * 31 + kvp.Key.GetHashCode();
+                hash = hash * 31 + kvp.Value;
+            }
+            hash = hash * 31 + _searchQuery.GetHashCode();
+            return hash;
+        }
+    }
+
+    private void RebuildSortedItems()
+    {
+        _sortedItems.Clear();
+        foreach (var kvp in _authoritativeTotals)
+        {
+            if (kvp.Value <= 0) continue;
+            EnsureSortCacheEntry(kvp.Key);
+            var cached = _sortCache[kvp.Key];
+            if (!MatchesSearch(cached.DisplayName)) continue;
+            _sortedItems.Add(kvp);
+        }
+        _sortedItems.Sort((a, b) =>
+        {
+            var ca = _sortCache[a.Key];
+            var cb = _sortCache[b.Key];
+            var cmp = ca.TypeOrder.CompareTo(cb.TypeOrder);
+            if (cmp != 0) return cmp;
+            cmp = ca.SubgroupOrder.CompareTo(cb.SubgroupOrder);
+            if (cmp != 0) return cmp;
+            cmp = string.Compare(ca.DisplayName, cb.DisplayName, StringComparison.OrdinalIgnoreCase);
+            if (cmp != 0) return cmp;
+            return b.Value.CompareTo(a.Value);
+        });
+    }
+
+    private void EnsureSortCacheEntry(ItemKey key)
+    {
+        if (_sortCache.ContainsKey(key)) return;
+        _sortCache[key] = new CachedSortEntry
+        {
+            DisplayName = GetDisplayName(key),
+            TypeOrder = GetItemTypeOrder(key),
+            SubgroupOrder = ReflectionHelpers.GetSubgroupOrder(key)
+        };
     }
 
     private ItemDrop.ItemData? CreateProjectedItem(ItemKey key, int amount, int maxStackSize)
@@ -626,7 +678,8 @@ public sealed class TerminalSessionService
     private static bool ShouldRestoreFailedDeposit(string reason) =>
         !string.IsNullOrWhiteSpace(reason) && (
             reason == "Conflict" || reason == "Player not found" ||
-            reason == "Player has no matching item" || reason == "Session not found" ||
+            reason == "Player has no matching item" || reason == "Player/terminal has no matching item" ||
+            reason == "Session not found" ||
             reason == "Player identity mismatch" || reason == "Unable to resolve player identity");
 
     private static bool IsIdentityFailure(string reason) =>
@@ -654,5 +707,12 @@ public sealed class TerminalSessionService
         public string RequestId { get; set; } = string.Empty;
         public ItemKey Key { get; set; }
         public int Amount { get; set; }
+    }
+
+    private struct CachedSortEntry
+    {
+        public string DisplayName;
+        public int TypeOrder;
+        public int SubgroupOrder;
     }
 }

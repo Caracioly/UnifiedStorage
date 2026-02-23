@@ -274,12 +274,10 @@ public sealed class TerminalAuthorityService
                 return ApplyFailure(request.RequestId, "", "Player not found", BuildSnapshot(state), state.Revision, "deposit");
             }
 
-            var removedAmount = RemoveFromPlayerInventory(player, request.Key, request.Amount);
+            var terminal = FindTerminalByUid(state.TerminalUid);
+            var removedAmount = RemoveFromTerminalInventory(terminal, request.Key, request.Amount);
             if (removedAmount <= 0)
-            {
-                var terminal = FindTerminalByUid(state.TerminalUid);
-                removedAmount = RemoveFromTerminalInventory(terminal, request.Key, request.Amount);
-            }
+                removedAmount = RemoveFromPlayerInventory(player, request.Key, request.Amount);
 
             if (removedAmount <= 0)
             {
