@@ -1,3 +1,4 @@
+using System.Reflection;
 using BepInEx.Logging;
 using Jotunn.Configs;
 using Jotunn.Entities;
@@ -56,11 +57,19 @@ public sealed class UnifiedChestPieceRegistrar
             return;
         }
 
+        UnifiedChestTerminalMarker.ConfigureDefaults(
+            _config.TerminalDisplayName.Value,
+            _config.TerminalTintEnabled.Value,
+            _config.TerminalTintColor.Value,
+            _config.TerminalTintStrength.Value);
+
         prefab.name = UnifiedChestTerminalMarker.TerminalPrefabName;
-        if (prefab.GetComponent<UnifiedChestTerminalMarker>() == null)
+        var marker = prefab.GetComponent<UnifiedChestTerminalMarker>();
+        if (marker == null)
         {
-            prefab.AddComponent<UnifiedChestTerminalMarker>();
+            marker = prefab.AddComponent<UnifiedChestTerminalMarker>();
         }
+        marker.ConfigureVisuals(_config.TerminalTintEnabled.Value, _config.TerminalTintColor.Value, _config.TerminalTintStrength.Value);
 
         var piece = prefab.GetComponent<Piece>();
         if (piece != null)
@@ -69,9 +78,25 @@ public sealed class UnifiedChestPieceRegistrar
             piece.m_description = "Access nearby chests in a unified view.";
         }
 
+        TrySetContainerDisplayName(prefab.GetComponent<Container>(), _config.TerminalDisplayName.Value);
+
         PieceManager.Instance.AddPiece(customPiece);
         _registered = true;
         _logger.LogInfo($"Unified Chest Terminal piece registered (base: {basePrefabName}).");
+    }
+
+    private static void TrySetContainerDisplayName(Container? container, string displayName)
+    {
+        if (container == null || string.IsNullOrWhiteSpace(displayName))
+        {
+            return;
+        }
+
+        var nameField = typeof(Container).GetField("m_name", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (nameField?.FieldType == typeof(string))
+        {
+            nameField.SetValue(container, displayName);
+        }
     }
 
     private static string? ResolveBaseChestPrefabName()

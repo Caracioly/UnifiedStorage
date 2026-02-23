@@ -5,6 +5,7 @@ using System.Reflection;
 using BepInEx.Logging;
 using UnifiedStorage.Core;
 using UnifiedStorage.Mod.Config;
+using UnifiedStorage.Mod.Diagnostics;
 using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Models;
 using UnifiedStorage.Mod.Pieces;
@@ -22,13 +23,15 @@ public sealed class TerminalAuthorityService
     private readonly StorageConfig _config;
     private readonly IContainerScanner _scanner;
     private readonly ManualLogSource _logger;
+    private readonly StorageTrace _trace;
     private readonly Dictionary<string, TerminalState> _states = new(StringComparer.Ordinal);
 
-    public TerminalAuthorityService(StorageConfig config, IContainerScanner scanner, ManualLogSource logger)
+    public TerminalAuthorityService(StorageConfig config, IContainerScanner scanner, ManualLogSource logger, StorageTrace trace)
     {
         _config = config;
         _scanner = scanner;
         _logger = logger;
+        _trace = trace;
     }
 
     public event Action<IReadOnlyCollection<long>, SessionDeltaDto>? DeltaReady;
@@ -92,6 +95,7 @@ public sealed class TerminalAuthorityService
     {
         lock (_sync)
         {
+            _trace.Info("AUTH", $"Open sender={sender} req={request.RequestId} session={request.SessionId} term={request.TerminalUid} player={request.PlayerId} radius={request.Radius:0.0}");
             if (string.IsNullOrWhiteSpace(request.TerminalUid))
             {
                 return new OpenSessionResponseDto
@@ -129,6 +133,7 @@ public sealed class TerminalAuthorityService
             state.Subscribers.Add(sender);
 
             var snapshot = BuildSnapshot(state);
+            _trace.Info("AUTH", $"Open accepted sender={sender} mappedPlayer={resolvedPlayerId} {_trace.SnapshotSummary(snapshot)}");
             return new OpenSessionResponseDto
             {
                 RequestId = request.RequestId,
@@ -144,6 +149,7 @@ public sealed class TerminalAuthorityService
         ReserveWithdrawResultDto result;
         lock (_sync)
         {
+            _trace.Info("AUTH", $"Reserve sender={sender} req={request.RequestId} op={request.OperationId} session={request.SessionId} term={request.TerminalUid} key={StorageTrace.Item(request.Key)} amount={request.Amount} expectedRev={request.ExpectedRevision}");
             var state = GetState(request.TerminalUid);
             if (state == null)
             {
@@ -202,6 +208,7 @@ public sealed class TerminalAuthorityService
             RememberOperation(state, request.OperationId);
             var snapshot = BuildSnapshot(state);
             deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
+            _trace.Info("AUTH", $"Reserve success sender={sender} token={token} reserved={removed} rev={state.Revision} {_trace.SnapshotSummary(snapshot)}");
 
             result = new ReserveWithdrawResultDto
             {
@@ -223,6 +230,7 @@ public sealed class TerminalAuthorityService
     {
         lock (_sync)
         {
+            _trace.Info("AUTH", $"Commit sender={sender} req={request.RequestId} op={request.OperationId} term={request.TerminalUid} token={request.TokenId}");
             var state = GetState(request.TerminalUid);
             if (state == null)
             {
@@ -258,6 +266,7 @@ public sealed class TerminalAuthorityService
             var applied = reservation.Amount;
             state.Reservations.Remove(reservation.TokenId);
             RememberOperation(state, request.OperationId);
+            _trace.Info("AUTH", $"Commit success sender={sender} token={reservation.TokenId} applied={applied} rev={state.Revision}");
 
             return new ApplyResultDto
             {
@@ -278,6 +287,7 @@ public sealed class TerminalAuthorityService
         ApplyResultDto result;
         lock (_sync)
         {
+            _trace.Info("AUTH", $"Cancel sender={sender} req={request.RequestId} op={request.OperationId} term={request.TerminalUid} token={request.TokenId} amount={request.Amount} player={request.PlayerId}");
             var state = GetState(request.TerminalUid);
             if (state == null)
             {
@@ -353,6 +363,7 @@ public sealed class TerminalAuthorityService
                     Revision = state.Revision,
                     Snapshot = snapshot
                 };
+                _trace.Info("AUTH", $"Cancel success sender={sender} token={request.TokenId} cancel={cancelAmount} restored={restored} dropped={unresolved} rev={state.Revision}");
                 goto EmitAndReturn;
             }
 
@@ -371,6 +382,7 @@ public sealed class TerminalAuthorityService
         ApplyResultDto result;
         lock (_sync)
         {
+            _trace.Info("AUTH", $"Deposit sender={sender} req={request.RequestId} op={request.OperationId} session={request.SessionId} term={request.TerminalUid} key={StorageTrace.Item(request.Key)} amount={request.Amount} expectedRev={request.ExpectedRevision} player={request.PlayerId}");
             var state = GetState(request.TerminalUid);
             if (state == null)
             {
@@ -408,15 +420,23 @@ public sealed class TerminalAuthorityService
                 return ApplyFailure(request.RequestId, string.Empty, "Player not found", BuildSnapshot(state), state.Revision, "deposit");
             }
 
-            var removedFromPlayer = RemoveFromPlayerInventory(player, request.Key, request.Amount);
-            if (removedFromPlayer <= 0)
+            var removedAmount = RemoveFromPlayerInventory(player, request.Key, request.Amount);
+            var removedSource = "player";
+            if (removedAmount <= 0)
             {
-                RememberOperation(state, request.OperationId);
-                return ApplyFailure(request.RequestId, string.Empty, "Player has no matching item", BuildSnapshot(state), state.Revision, "deposit");
+                var terminal = FindTerminalByUid(state.TerminalUid);
+                removedAmount = RemoveFromTerminalInventory(terminal, request.Key, request.Amount);
+                removedSource = "terminal";
             }
 
-            var stored = AddToChests(state, request.Key, removedFromPlayer, player);
-            var notStored = removedFromPlayer - stored;
+            if (removedAmount <= 0)
+            {
+                RememberOperation(state, request.OperationId);
+                return ApplyFailure(request.RequestId, string.Empty, "Player/terminal has no matching item", BuildSnapshot(state), state.Revision, "deposit");
+            }
+
+            var stored = AddToChests(state, request.Key, removedAmount, player);
+            var notStored = removedAmount - stored;
             if (notStored > 0)
             {
                 var restored = AddToPlayerInventory(player, request.Key, notStored);
@@ -450,6 +470,7 @@ public sealed class TerminalAuthorityService
                 Revision = state.Revision,
                 Snapshot = snapshot
             };
+            _trace.Info("AUTH", $"Deposit result sender={sender} removed={removedAmount} source={removedSource} stored={stored} notStored={notStored} success={result.Success} reason={result.Reason} rev={state.Revision}");
         }
 
         EmitDeltas(deltas);
@@ -461,6 +482,7 @@ public sealed class TerminalAuthorityService
         List<(IReadOnlyCollection<long> Peers, SessionDeltaDto Delta)> deltas = new();
         lock (_sync)
         {
+            _trace.Info("AUTH", $"Close sender={sender} req={request.RequestId} session={request.SessionId} term={request.TerminalUid} player={request.PlayerId}");
             var state = GetState(request.TerminalUid);
             if (state == null)
             {
@@ -497,6 +519,7 @@ public sealed class TerminalAuthorityService
                 state.Revision++;
                 var snapshot = BuildSnapshot(state);
                 deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
+                _trace.Info("AUTH", $"Close restored reservations sender={sender} rev={state.Revision} {_trace.SnapshotSummary(snapshot)}");
             }
 
             if (state.Subscribers.Count == 0 && state.Reservations.Count == 0)
@@ -559,6 +582,7 @@ public sealed class TerminalAuthorityService
                 MarkSnapshotDirty(existing);
             }
 
+            _trace.Verbose("AUTH", $"GetState existing term={existing.TerminalUid} session={existing.SessionId} radius={existing.Radius:0.0}");
             return existing;
         }
 
@@ -570,6 +594,7 @@ public sealed class TerminalAuthorityService
             Radius = request.Radius
         };
         _states[request.TerminalUid] = created;
+        _trace.Info("AUTH", $"GetState created term={created.TerminalUid} session={created.SessionId} radius={created.Radius:0.0}");
         return created;
     }
 
@@ -671,6 +696,7 @@ public sealed class TerminalAuthorityService
         state.CachedSnapshot = snapshot;
         state.CachedSnapshotAt = now;
         state.SnapshotDirty = false;
+        _trace.Verbose("AUTH", $"BuildSnapshot {_trace.SnapshotSummary(snapshot)}");
         return snapshot;
     }
 
@@ -691,6 +717,12 @@ public sealed class TerminalAuthorityService
         state.Chests = _scanner
             .GetNearbyContainers(state.AnchorPosition, state.Radius, terminal, onlyVanillaChests: true)
             .ToList();
+        _trace.Info("AUTH", $"RefreshChests term={state.TerminalUid} radius={state.Radius:0.0} count={state.Chests.Count}");
+        if (_trace.IsVerbose && state.Chests.Count > 0)
+        {
+            var preview = string.Join(", ", state.Chests.Take(16).Select(StorageTrace.Chest));
+            _trace.Verbose("AUTH", $"RefreshChests list: {preview}");
+        }
     }
 
     private int RemoveFromChests(TerminalState state, ItemKey key, int amount, Player? player)
@@ -729,6 +761,7 @@ public sealed class TerminalAuthorityService
                 var take = Math.Min(item.m_stack, remaining);
                 inv.RemoveItem(item, take);
                 remaining -= take;
+                _trace.Verbose("AUTH", $"RemoveFromChests term={state.TerminalUid} chest={chest.SourceId} key={StorageTrace.Item(key)} took={take} remaining={remaining}");
             }
         }
 
@@ -773,6 +806,10 @@ public sealed class TerminalAuthorityService
             });
 
             remaining -= movedInChest;
+            if (movedInChest > 0)
+            {
+                _trace.Verbose("AUTH", $"AddToChests term={state.TerminalUid} chest={chest.SourceId} key={StorageTrace.Item(key)} moved={movedInChest} remaining={remaining}");
+            }
         }
 
         return amount - remaining;
@@ -788,6 +825,37 @@ public sealed class TerminalAuthorityService
         var removed = 0;
         var remaining = amount;
         var inventory = player.GetInventory();
+        foreach (var item in inventory.GetAllItems().Where(i => MatchKey(i, key)).ToList())
+        {
+            if (remaining <= 0)
+            {
+                break;
+            }
+
+            var take = Math.Min(item.m_stack, remaining);
+            inventory.RemoveItem(item, take);
+            removed += take;
+            remaining -= take;
+        }
+
+        return removed;
+    }
+
+    private static int RemoveFromTerminalInventory(Container? terminal, ItemKey key, int amount)
+    {
+        if (terminal == null || amount <= 0)
+        {
+            return 0;
+        }
+
+        var inventory = terminal.GetInventory();
+        if (inventory == null)
+        {
+            return 0;
+        }
+
+        var removed = 0;
+        var remaining = amount;
         foreach (var item in inventory.GetAllItems().Where(i => MatchKey(i, key)).ToList())
         {
             if (remaining <= 0)

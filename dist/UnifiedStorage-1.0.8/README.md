@@ -2,7 +2,7 @@
 
 Unified storage for Valheim using a dedicated terminal, without changing vanilla chest behavior.
 
-## Current state (v1.0.8)
+## Current state (v1.0.6)
 
 - New placeable: `Unified Chest` (via Jotunn).
 - Opening the terminal uses Valheim's native chest UI.
@@ -31,15 +31,9 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 - `ScanRadius = 20`
 - `MaxContainersScanned = 128`
 - `RequireAccessCheck = true`
-- `EnableOperationLogs = true`
-- `EnableVerboseOperationLogs = false`
-- `SnapshotItemLogLimit = 12`
 - `TerminalPieceEnabled = true`
 - `TerminalDisplayName = "Unified Chest"`
 - `TerminalRangeOverride = 0`
-- `TerminalTintEnabled = true`
-- `TerminalTintColor = "#6EA84A"`
-- `TerminalTintStrength = 0.35`
 
 ## Project structure
 

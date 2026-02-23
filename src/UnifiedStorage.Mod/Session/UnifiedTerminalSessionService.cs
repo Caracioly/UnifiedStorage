@@ -5,6 +5,7 @@ using System.Reflection;
 using BepInEx.Logging;
 using UnifiedStorage.Core;
 using UnifiedStorage.Mod.Config;
+using UnifiedStorage.Mod.Diagnostics;
 using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Models;
 using UnifiedStorage.Mod.Network;
@@ -26,6 +27,7 @@ public sealed class UnifiedTerminalSessionService
     private readonly IContainerScanner _scanner;
     private readonly TerminalRpcRoutes _routes;
     private readonly ManualLogSource _logger;
+    private readonly StorageTrace _trace;
 
     private readonly Dictionary<ItemKey, int> _authoritativeTotals = new();
     private readonly Dictionary<ItemKey, int> _displayedTotals = new();
@@ -60,12 +62,14 @@ public sealed class UnifiedTerminalSessionService
         StorageConfig config,
         IContainerScanner scanner,
         TerminalRpcRoutes routes,
-        ManualLogSource logger)
+        ManualLogSource logger,
+        StorageTrace trace)
     {
         _config = config;
         _scanner = scanner;
         _routes = routes;
         _logger = logger;
+        _trace = trace;
 
         _routes.SessionSnapshotReceived += OnSessionSnapshotReceived;
         _routes.ReserveResultReceived += OnReserveResultReceived;
@@ -135,6 +139,7 @@ public sealed class UnifiedTerminalSessionService
         _authoritativeTotals.Clear();
         _displayedTotals.Clear();
         _prototypes.Clear();
+        _trace.Info("SESSION", $"Begin term={_terminalUid} player={ResolveLocalPlayerId()} radius={_scanRadius:0.0}");
         RefreshTrackedChestHandles();
         RefreshTerminalInventoryFromAuthoritative();
         RequestSessionSnapshot();
@@ -196,6 +201,7 @@ public sealed class UnifiedTerminalSessionService
         }
 
         _searchQuery = normalized;
+        _trace.Verbose("SESSION", $"Search changed term={_terminalUid} query='{_searchQuery}'");
         RefreshTerminalInventoryFromAuthoritative();
         _uiRevision++;
     }
@@ -214,6 +220,7 @@ public sealed class UnifiedTerminalSessionService
         }
 
         var currentDisplayed = CaptureCurrentDisplayedTotals();
+        _trace.Verbose("SESSION", $"Container interaction term={_terminalUid} displayedKeys={currentDisplayed.Count}");
         ApplyDisplayedDeltaAsOperations(currentDisplayed);
         ReplaceDisplayedTotals(currentDisplayed);
 
@@ -236,11 +243,13 @@ public sealed class UnifiedTerminalSessionService
             return;
         }
 
+        _trace.Verbose("SESSION", $"World change refresh requested term={_terminalUid}");
         RequestSessionSnapshot();
     }
 
     public void EndSession()
     {
+        _trace.Info("SESSION", $"End term={_terminalUid} session={_sessionId} reservations={_pendingReservations.Count} pendingDeposits={_pendingDeposits.Count}");
         if (_terminal != null && !string.IsNullOrWhiteSpace(_terminalUid))
         {
             _routes.RequestCloseSession(new CloseSessionRequestDto
@@ -301,6 +310,7 @@ public sealed class UnifiedTerminalSessionService
             {
                 _logger.LogDebug($"OpenSession rejected: {response.Reason}");
             }
+            _trace.Warn("SESSION", $"OpenSession rejected term={_terminalUid} session={_sessionId} reason={response.Reason}");
 
             if (IsIdentityFailure(response.Reason))
             {
@@ -312,6 +322,7 @@ public sealed class UnifiedTerminalSessionService
             _openSessionFailureCount = Math.Min(_openSessionFailureCount + 1, 8);
             var retryDelay = GetOpenSessionRetryDelay(_openSessionFailureCount);
             _nextSnapshotRetryAt = Time.unscaledTime + retryDelay;
+            _trace.Info("SESSION", $"OpenSession retry term={_terminalUid} failureCount={_openSessionFailureCount} retryIn={retryDelay:0.00}s");
             return;
         }
 
@@ -339,6 +350,11 @@ public sealed class UnifiedTerminalSessionService
                 ReservedAmount = result.ReservedAmount,
                 ExpiresAt = Time.unscaledTime + ReservationTtlSeconds
             });
+            _trace.Info("SESSION", $"Reserve ok token={result.TokenId} key={StorageTrace.Item(result.Key)} amount={result.ReservedAmount} pendingReservations={_pendingReservations.Count}");
+        }
+        else
+        {
+            _trace.Warn("SESSION", $"Reserve failed key={StorageTrace.Item(result.Key)} reason={result.Reason} amount={result.ReservedAmount}");
         }
 
         ApplySnapshot(result.Snapshot);
@@ -352,6 +368,7 @@ public sealed class UnifiedTerminalSessionService
         }
 
         var isDeposit = string.Equals(result.OperationType, "deposit", StringComparison.Ordinal);
+        _trace.Info("SESSION", $"ApplyResult op={result.OperationType} success={result.Success} reason={result.Reason} token={result.TokenId} applied={result.AppliedAmount} rev={result.Revision}");
         if (isDeposit)
         {
             // Deposit rollback is keyed by request ID and must run even when snapshot payload is partial/invalid.
@@ -488,6 +505,7 @@ public sealed class UnifiedTerminalSessionService
 
         RefreshTrackedChestHandles();
         RefreshTerminalInventoryFromAuthoritative();
+        _trace.Info("SESSION", $"ApplySnapshot {_trace.SnapshotSummary(snapshot)}");
         _uiRevision++;
     }
 
@@ -502,10 +520,12 @@ public sealed class UnifiedTerminalSessionService
             var delta = current - previous;
             if (delta < 0)
             {
+                _trace.Info("SESSION", $"Delta withdraw key={StorageTrace.Item(key)} amount={-delta} prev={previous} now={current}");
                 RequestReserveWithdraw(key, -delta);
             }
             else if (delta > 0)
             {
+                _trace.Info("SESSION", $"Delta deposit/cancel key={StorageTrace.Item(key)} amount={delta} prev={previous} now={current}");
                 RequestCancelAndOrDeposit(key, delta);
             }
         }
@@ -529,6 +549,7 @@ public sealed class UnifiedTerminalSessionService
             Key = key,
             Amount = amount
         });
+        _trace.Info("SESSION", $"RequestReserve key={StorageTrace.Item(key)} amount={amount} rev={_revision} session={_sessionId}");
     }
 
     private void RequestCancelAndOrDeposit(ItemKey key, int amount)
@@ -562,6 +583,7 @@ public sealed class UnifiedTerminalSessionService
                 TokenId = pending.TokenId,
                 Amount = cancelAmount
             });
+            _trace.Info("SESSION", $"RequestCancel token={pending.TokenId} key={StorageTrace.Item(key)} amount={cancelAmount} remainingBefore={remaining}");
 
             pending.ReservedAmount -= cancelAmount;
             remaining -= cancelAmount;
@@ -595,6 +617,7 @@ public sealed class UnifiedTerminalSessionService
             Key = key,
             Amount = remaining
         });
+        _trace.Info("SESSION", $"RequestDeposit req={requestId} key={StorageTrace.Item(key)} amount={remaining} rev={_revision}");
     }
 
     private void CommitPendingReservations()
@@ -610,6 +633,7 @@ public sealed class UnifiedTerminalSessionService
                 TokenId = pending.TokenId
             });
             pending.CommitRequested = true;
+            _trace.Info("SESSION", $"RequestCommit token={pending.TokenId} key={StorageTrace.Item(pending.Key)} amount={pending.ReservedAmount}");
         }
     }
 
@@ -630,6 +654,7 @@ public sealed class UnifiedTerminalSessionService
 
         if (removed)
         {
+            _trace.Warn("SESSION", $"Reservation TTL expired removed={_pendingReservations.Count} -> requesting snapshot");
             RequestSessionSnapshot();
         }
     }
@@ -652,6 +677,7 @@ public sealed class UnifiedTerminalSessionService
             AnchorZ = _terminal.transform.position.z,
             Radius = _scanRadius
         });
+        _trace.Info("SESSION", $"RequestOpenSession term={_terminalUid} session={_sessionId} player={ResolveLocalPlayerId()} radius={_scanRadius:0.0}");
         _nextSnapshotRetryAt = Time.unscaledTime + 0.5f;
     }
 
@@ -710,7 +736,6 @@ public sealed class UnifiedTerminalSessionService
         {
             ClearInventory(inventory);
             _displayedTotals.Clear();
-
             var width = Math.Max(1, GetInventoryWidth(inventory));
             var filtered = _authoritativeTotals
                 .Where(kvp => kvp.Value > 0 && MatchesSearch(GetDisplayName(kvp.Key)))
@@ -729,10 +754,12 @@ public sealed class UnifiedTerminalSessionService
                 .ToList();
 
             var totalVirtualStacks = filtered.Sum(kvp => (int)Math.Ceiling(kvp.Value / 999f));
-            var reserveEmptySlots = _slotsTotalPhysical > SlotsUsedVirtual ? 1 : 0;
-            var requiredSlots = totalVirtualStacks + reserveEmptySlots;
-            _contentRows = Math.Max(_visibleRows, (int)Math.Ceiling(requiredSlots / (float)width));
+            // Keep at most one extra slot for user deposits, but avoid forcing many empty rows.
+            var reserveOneSlot = _slotsTotalPhysical > SlotsUsedVirtual ? 1 : 0;
+            var requiredSlots = Math.Max(1, totalVirtualStacks + reserveOneSlot);
+            _contentRows = Math.Max(1, (int)Math.Ceiling(requiredSlots / (float)width));
             SetInventorySize(inventory, width, _contentRows);
+            _trace.Verbose("SESSION", $"Projection term={_terminalUid} filteredKeys={filtered.Count} virtualStacks={totalVirtualStacks} slotsTotal={_slotsTotalPhysical} rows={_contentRows}");
 
             foreach (var kvp in filtered)
             {
@@ -751,6 +778,7 @@ public sealed class UnifiedTerminalSessionService
 
                 _displayedTotals[kvp.Key] = kvp.Value - remaining;
             }
+
         }
         finally
         {
@@ -776,6 +804,12 @@ public sealed class UnifiedTerminalSessionService
         _trackedChests = _scanner
             .GetNearbyContainers(_terminal.transform.position, _scanRadius, _terminal, onlyVanillaChests: true)
             .ToList();
+        _trace.Info("SESSION", $"TrackedChests term={_terminalUid} count={_trackedChests.Count} radius={_scanRadius:0.0}");
+        if (_trace.IsVerbose && _trackedChests.Count > 0)
+        {
+            var preview = string.Join(", ", _trackedChests.Take(16).Select(StorageTrace.Chest));
+            _trace.Verbose("SESSION", $"TrackedChests list: {preview}");
+        }
         _nextTrackedChestRefreshAt = Time.unscaledTime + TrackedChestRefreshSeconds;
     }
 
@@ -877,6 +911,7 @@ public sealed class UnifiedTerminalSessionService
         {
             toRestore = pending.Amount;
         }
+        _trace.Info("SESSION", $"DepositResult req={result.RequestId} success={result.Success} reason={result.Reason} pendingAmount={pending.Amount} restore={toRestore}");
 
         if (toRestore <= 0)
         {
@@ -1249,4 +1284,5 @@ public sealed class UnifiedTerminalSessionService
         public ItemKey Key { get; set; }
         public int Amount { get; set; }
     }
+
 }

@@ -4,6 +4,7 @@ using HarmonyLib;
 using Jotunn.Managers;
 using TMPro;
 using UnifiedStorage.Mod.Config;
+using UnifiedStorage.Mod.Diagnostics;
 using UnifiedStorage.Mod.Network;
 using UnifiedStorage.Mod.Patches;
 using UnifiedStorage.Mod.Pieces;
@@ -20,7 +21,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 {
     public const string PluginGuid = "andre.valheim.unifiedstorage";
     public const string PluginName = "Unified Storage";
-    public const string PluginVersion = "1.0.6";
+    public const string PluginVersion = "1.0.8";
     private const int VisibleGridRows = 7;
     private const float FooterPanelBottomOffset = -62f;
     private const float FooterPanelHeight = 44f;
@@ -43,6 +44,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     internal static UnifiedStoragePlugin? Instance { get; private set; }
 
     private StorageConfig? _config;
+    private StorageTrace? _trace;
     private Harmony? _harmony;
     private UnifiedTerminalSessionService? _session;
     private TerminalAuthorityService? _authority;
@@ -73,12 +75,13 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     {
         Instance = this;
         _config = new StorageConfig(Config);
+        _trace = new StorageTrace(Logger, _config);
 
         var scanner = new ContainerScanner(_config);
-        _authority = new TerminalAuthorityService(_config, scanner, Logger);
-        _rpcRoutes = new TerminalRpcRoutes(_authority, Logger);
+        _authority = new TerminalAuthorityService(_config, scanner, Logger, _trace);
+        _rpcRoutes = new TerminalRpcRoutes(_authority, Logger, _trace);
         _rpcRoutes.EnsureRegistered();
-        _session = new UnifiedTerminalSessionService(_config, scanner, _rpcRoutes, Logger);
+        _session = new UnifiedTerminalSessionService(_config, scanner, _rpcRoutes, Logger, _trace);
         _pieceRegistrar = new UnifiedChestPieceRegistrar(_config, Logger);
         PrefabManager.OnVanillaPrefabsAvailable += OnVanillaPrefabsAvailable;
 
