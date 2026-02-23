@@ -4,6 +4,7 @@ using HarmonyLib;
 using Jotunn.Managers;
 using UnifiedStorage.Mod.Config;
 using UnifiedStorage.Mod.Diagnostics;
+using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Network;
 using UnifiedStorage.Mod.Patches;
 using UnifiedStorage.Mod.Pieces;
@@ -30,6 +31,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     private StorageConfig? _config;
     private StorageTrace? _trace;
     private Harmony? _harmony;
+    private IContainerScanner? _scanner;
     private TerminalSessionService? _session;
     private TerminalAuthorityService? _authority;
     private TerminalRpcRoutes? _rpcRoutes;
@@ -49,11 +51,11 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _config = new StorageConfig(Config);
         _trace = new StorageTrace(Logger, _config);
 
-        var scanner = new ContainerScanner(_config);
-        _authority = new TerminalAuthorityService(_config, scanner, Logger, _trace);
+        _scanner = new ContainerScanner(_config);
+        _authority = new TerminalAuthorityService(_config, _scanner, Logger, _trace);
         _rpcRoutes = new TerminalRpcRoutes(_authority, Logger, _trace);
         _rpcRoutes.EnsureRegistered();
-        _session = new TerminalSessionService(_config, scanner, _rpcRoutes, Logger, _trace);
+        _session = new TerminalSessionService(_config, _scanner, _rpcRoutes, Logger, _trace);
         _pieceRegistrar = new UnifiedTerminalRegistrar(_config, Logger);
         _ui = new TerminalUIManager();
 
@@ -76,6 +78,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(ZInputGetKeyPatch));
         _harmony.PatchAll(typeof(ZInputGetKeyDownPatch));
         _harmony.PatchAll(typeof(ZInputGetKeyUpPatch));
+        _harmony.PatchAll(typeof(ContainerHoverTextPatch));
 
         Logger.LogInfo($"{PluginName} v{PluginVersion} loaded.");
     }
@@ -176,6 +179,12 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 
     internal static bool ShouldBlockGameInput() => _blockGameInput;
     internal bool IsUnifiedSessionActive() => _session != null && _session.IsActive;
+
+    internal int GetNearbyChestCount(Vector3 position)
+    {
+        if (_scanner == null || _config == null) return 0;
+        return _scanner.GetNearbyContainers(position, _config.ScanRadius.Value).Count;
+    }
 
     internal void OnTrackedInventoryChanged(Inventory inventory)
     {
