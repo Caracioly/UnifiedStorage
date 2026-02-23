@@ -374,6 +374,7 @@ public sealed class TerminalSessionService
             _contentRows = Math.Max(1, (int)Math.Ceiling(requiredSlots / (float)width));
             ReflectionHelpers.SetInventorySize(inventory, width, _contentRows);
 
+            var slotIndex = 0;
             foreach (var kvp in filtered)
             {
                 var remaining = kvp.Value;
@@ -382,11 +383,16 @@ public sealed class TerminalSessionService
                 {
                     var stack = Math.Min(maxStack, remaining);
                     var item = CreateProjectedItem(kvp.Key, stack, maxStack);
-                    if (item == null || !inventory.AddItem(item)) break;
+                    if (item == null) break;
+                    var x = slotIndex % width;
+                    var y = slotIndex / width;
+                    ReflectionHelpers.AddItemDirectly(inventory, item, x, y);
+                    slotIndex++;
                     remaining -= stack;
                 }
                 _displayedTotals[kvp.Key] = kvp.Value - remaining;
             }
+            ReflectionHelpers.NotifyInventoryChanged(inventory);
         }
         finally { _isApplyingProjection = false; }
     }

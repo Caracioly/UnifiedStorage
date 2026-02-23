@@ -64,6 +64,12 @@ public static class ReflectionHelpers
     private static readonly FieldInfo? GridElementSpaceField =
         AccessTools.Field(typeof(InventoryGrid), "m_elementSpace");
 
+    private static readonly FieldInfo? InventoryItemListField =
+        AccessTools.Field(typeof(Inventory), "m_inventory");
+
+    private static readonly MethodInfo? InventoryChangedMethod =
+        typeof(Inventory).GetMethod("Changed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
     private static readonly MethodInfo?[] DropItemMethods = typeof(ItemDrop)
         .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
         .Where(m => string.Equals(m.Name, "DropItem", StringComparison.Ordinal))
@@ -225,6 +231,22 @@ public static class ReflectionHelpers
             return 40;
         return 100;
     }
+
+    public static List<ItemDrop.ItemData>? GetInventoryItemList(Inventory inventory) =>
+        InventoryItemListField?.GetValue(inventory) as List<ItemDrop.ItemData>;
+
+    public static void AddItemDirectly(Inventory inventory, ItemDrop.ItemData item, int x, int y)
+    {
+        item.m_gridPos = new Vector2i(x, y);
+        var list = GetInventoryItemList(inventory);
+        if (list != null)
+            list.Add(item);
+        else
+            inventory.AddItem(item);
+    }
+
+    public static void NotifyInventoryChanged(Inventory inventory) =>
+        InventoryChangedMethod?.Invoke(inventory, null);
 
     public static void ClearInventory(Inventory? inventory)
     {
