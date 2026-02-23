@@ -38,6 +38,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 
     private bool _trackedInventoryDirty;
     private bool _isApplyingRefresh;
+    private bool _wasDragging;
     private float _nextAllowedWorldRefreshAt;
     private string _lastSearch = string.Empty;
     private int _lastUiRevision = -1;
@@ -120,6 +121,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _lastSearch = string.Empty;
         _trackedInventoryDirty = false;
         _isApplyingRefresh = false;
+        _wasDragging = false;
         _lastUiRevision = -1;
         _session?.EndSession();
         _ui?.Reset();
@@ -140,6 +142,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         if (!_session.IsActive || !InventoryGui.IsVisible() || !gui.IsContainerOpen())
         {
             _blockGameInput = false;
+            _wasDragging = false;
             _ui.SetTakeAllButtonEnabled(gui, true);
             _ui.SetNativeUiVisible(false);
             _ui.RestoreLayout();
@@ -150,6 +153,11 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _ui.SetTakeAllButtonEnabled(gui, false);
         _ui.SetNativeUiVisible(true);
         _ui.UpdateContainerName(gui);
+
+        var isDragging = ReflectionHelpers.IsDragInProgress();
+        if (isDragging && !_wasDragging)
+            OnContainerInteraction();
+        _wasDragging = isDragging;
 
         if (!_ui.IsLayoutCaptured)
             _ui.ApplyExpandedLayout(gui);
