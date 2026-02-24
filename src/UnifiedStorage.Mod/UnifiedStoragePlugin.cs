@@ -22,7 +22,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 {
     public const string PluginGuid = "andre.valheim.unifiedstorage";
     public const string PluginName = "Unified Storage";
-    public const string PluginVersion = "1.1.0";
+    public const string PluginVersion = "1.1.1";
     private const float WorldChangeRefreshMinInterval = 0.2f;
 
     private static bool _blockGameInput;
