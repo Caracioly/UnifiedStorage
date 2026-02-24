@@ -265,6 +265,12 @@ public sealed class TerminalAuthorityService
                 return ApplyFailure(request.RequestId, "", "Player not found", BuildSnapshot(state), state.Revision, "deposit");
             }
 
+            if (!HasAnyCapacityFor(state, request.Key, player))
+            {
+                RememberOperation(state, request.OperationId);
+                return ApplyFailure(request.RequestId, "", "No storage space", BuildSnapshot(state), state.Revision, "deposit");
+            }
+
             var terminal = FindTerminalByUid(state.TerminalUid);
             var removedAmount = RemoveFromTerminalInventory(terminal, request.Key, request.Amount);
             if (removedAmount <= 0)
@@ -277,26 +283,40 @@ public sealed class TerminalAuthorityService
             }
 
             var stored = AddToChests(state, request.Key, removedAmount, player);
+            if (stored <= 0)
+            {
+                RememberOperation(state, request.OperationId);
+                result = new ApplyResultDto
+                {
+                    RequestId = request.RequestId, Success = false,
+                    Reason = "No storage space", OperationType = "deposit",
+                    AppliedAmount = 0, Revision = state.Revision, Snapshot = BuildSnapshot(state)
+                };
+                goto EmitAndReturn;
+            }
+
             var notStored = removedAmount - stored;
             if (notStored > 0)
             {
-                var restored = AddToPlayerInventory(player, request.Key, notStored);
-                var unresolved = notStored - restored;
+                var restoredToPlayer = AddToPlayerInventory(player, request.Key, notStored);
+                var unresolved = notStored - restoredToPlayer;
                 if (unresolved > 0) DropNearTerminal(state, request.Key, unresolved);
             }
 
-            if (stored > 0) { MarkSnapshotDirty(state); state.Revision++; }
+            MarkSnapshotDirty(state);
+            state.Revision++;
             RememberOperation(state, request.OperationId);
             var snapshot = BuildSnapshot(state);
-            if (stored > 0) deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
+            deltas.Add((state.Subscribers.ToList(), BuildDelta(state, snapshot)));
 
             result = new ApplyResultDto
             {
-                RequestId = request.RequestId, Success = stored > 0,
-                Reason = stored > 0 ? "" : "No storage space", OperationType = "deposit",
+                RequestId = request.RequestId, Success = true,
+                Reason = "", OperationType = "deposit",
                 AppliedAmount = stored, Revision = state.Revision, Snapshot = snapshot
             };
         }
+    EmitAndReturn:
         EmitDeltas(deltas);
         return result;
     }
@@ -516,6 +536,41 @@ public sealed class TerminalAuthorityService
             if (!ReflectionHelpers.TryDropItem(stack, stackAmount, state.AnchorPosition + Vector3.up, Quaternion.identity)) break;
             remaining -= stackAmount;
         }
+    }
+
+    private int AddToTerminalInventory(Container terminal, ItemKey key, int amount)
+    {
+        if (amount <= 0) return 0;
+        var maxStack = ReflectionHelpers.GetMaxStackSize(key);
+        if (maxStack <= 0) maxStack = 1;
+        var inventory = terminal.GetInventory();
+        if (inventory == null) return 0;
+        return ChunkedTransfer.Move(amount, maxStack, chunkAmount =>
+        {
+            var stack = ReflectionHelpers.CreateItemStack(key, chunkAmount);
+            if (stack == null) return 0;
+            return ReflectionHelpers.TryAddItemMeasured(inventory, key, stack, chunkAmount);
+        });
+    }
+
+    private bool HasAnyCapacityFor(TerminalState state, ItemKey key, Player? player)
+    {
+        var maxStack = ReflectionHelpers.GetMaxStackSize(key);
+        if (maxStack <= 0) maxStack = 1;
+        foreach (var chest in state.Chests)
+        {
+            var inv = chest.Container.GetInventory();
+            if (inv == null) continue;
+            if (_config.RequireAccessCheck.Value && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
+            var items = inv.GetAllItems();
+            foreach (var item in items)
+            {
+                if (ReflectionHelpers.MatchKey(item, key) && item.m_stack < maxStack) return true;
+            }
+            var totalSlots = ReflectionHelpers.GetInventoryWidth(inv) * ReflectionHelpers.GetInventoryHeight(inv);
+            if (items.Count < totalSlots) return true;
+        }
+        return false;
     }
 
     private static Container? FindTerminalByUid(string terminalUid)

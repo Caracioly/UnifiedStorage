@@ -84,6 +84,13 @@ public sealed class TerminalSessionService
     public int ChestsInRange => _chestCount;
     public int UiRevision => _uiRevision;
     public int ContentRows => _contentRows;
+    public bool IsStorageFull => _slotsTotalPhysical > 0 && SlotsUsedVirtual >= _slotsTotalPhysical;
+
+    public bool IsTerminalInventory(Inventory inventory)
+    {
+        if (!IsActive || _terminal == null || inventory == null) return false;
+        return ReferenceEquals(inventory, _terminal.GetInventory());
+    }
 
     public int SlotsUsedVirtual
     {
@@ -683,7 +690,7 @@ public sealed class TerminalSessionService
         !string.IsNullOrWhiteSpace(reason) && (
             reason == "Conflict" || reason == "Player not found" ||
             reason == "Player has no matching item" || reason == "Player/terminal has no matching item" ||
-            reason == "Session not found" ||
+            reason == "Session not found" || reason == "No storage space" ||
             reason == "Player identity mismatch" || reason == "Unable to resolve player identity");
 
     private static bool IsIdentityFailure(string reason) =>

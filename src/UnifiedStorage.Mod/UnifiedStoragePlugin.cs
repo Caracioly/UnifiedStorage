@@ -63,6 +63,9 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 
         _harmony = new Harmony($"{PluginGuid}.patches");
         _harmony.PatchAll(typeof(ContainerInteractPatch));
+        _harmony.PatchAll(typeof(InventoryAddItemPatch));
+        _harmony.PatchAll(typeof(InventoryAddItemAtPositionPatch));
+        _harmony.PatchAll(typeof(InventoryMoveItemToThisPatch));
         _harmony.PatchAll(typeof(InventoryGuiHidePatch));
         _harmony.PatchAll(typeof(InventoryGuiAwakePatch));
         _harmony.PatchAll(typeof(InventoryGuiUpdatePatch));
@@ -179,6 +182,13 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
 
     internal static bool ShouldBlockGameInput() => _blockGameInput;
     internal bool IsUnifiedSessionActive() => _session != null && _session.IsActive;
+
+    internal bool ShouldBlockDeposit(Inventory targetInventory)
+    {
+        if (_session == null || !_session.IsActive || _session.IsApplyingProjection) return false;
+        if (!_session.IsTerminalInventory(targetInventory)) return false;
+        return _session.IsStorageFull;
+    }
 
     internal int GetNearbyChestCount(Vector3 position)
     {
