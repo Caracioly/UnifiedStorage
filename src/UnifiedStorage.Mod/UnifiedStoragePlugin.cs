@@ -165,8 +165,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
             OnContainerInteraction();
         _wasDragging = isDragging;
 
-        if (!_ui.IsLayoutCaptured)
-            _ui.ApplyExpandedLayout(gui);
+        _ui.ApplyExpandedLayout(gui, _session.ContentRows);
 
         if (_session.UiRevision != _lastUiRevision)
         {

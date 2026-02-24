@@ -481,7 +481,7 @@ public sealed class TerminalSessionService
     private void RefreshTrackedChestHandles()
     {
         if (_terminal == null) { _trackedChests.Clear(); _nextTrackedChestRefreshAt = Time.unscaledTime + TrackedChestRefreshSeconds; return; }
-        _trackedChests = _scanner.GetNearbyContainers(_terminal.transform.position, _scanRadius, _terminal, onlyVanillaChests: true).ToList();
+        _trackedChests = _scanner.GetNearbyContainers(_terminal.transform.position, _scanRadius, _terminal).ToList();
         _nextTrackedChestRefreshAt = Time.unscaledTime + TrackedChestRefreshSeconds;
     }
 

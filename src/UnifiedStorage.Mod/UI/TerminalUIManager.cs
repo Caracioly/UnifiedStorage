@@ -30,6 +30,7 @@ public sealed class TerminalUIManager
     private bool _layoutCaptured;
     private bool _nativeBuilt;
     private bool _isApplyingChestToggle;
+    private int _lastAppliedVisibleRows;
 
     public bool IsSearchFocused => _searchInputField != null && _searchInputField.isFocused;
     public string SearchText => _searchInputField?.text ?? string.Empty;
@@ -251,8 +252,7 @@ public sealed class TerminalUIManager
 
         var currentContainer = ReflectionHelpers.GetCurrentContainer(gui);
         if (currentContainer == null
-            || UnifiedTerminal.IsTerminal(currentContainer)
-            || !ChestInclusionRules.IsVanillaChest(currentContainer))
+            || UnifiedTerminal.IsTerminal(currentContainer))
         {
             _boundChestForToggle = null;
             SetChestToggleVisible(false);
@@ -277,8 +277,7 @@ public sealed class TerminalUIManager
         var gui = InventoryGui.instance;
         var currentContainer = gui != null ? ReflectionHelpers.GetCurrentContainer(gui) : null;
         if (currentContainer == null
-            || UnifiedTerminal.IsTerminal(currentContainer)
-            || !ChestInclusionRules.IsVanillaChest(currentContainer))
+            || UnifiedTerminal.IsTerminal(currentContainer))
             return;
 
         ChestInclusionRules.TrySetIncludedInUnified(currentContainer, includeInUnified);
@@ -315,7 +314,7 @@ public sealed class TerminalUIManager
             _searchInputField.text = string.Empty;
     }
 
-    public void ApplyExpandedLayout(InventoryGui gui)
+    public void ApplyExpandedLayout(InventoryGui gui, int contentRows)
     {
         if (_containerRect == null) return;
 
@@ -333,9 +332,14 @@ public sealed class TerminalUIManager
                 _originalGridOffsetMax = gridRoot.offsetMax;
             }
             _layoutCaptured = true;
+            _lastAppliedVisibleRows = -1;
         }
 
-        ReflectionHelpers.SetGridHeight(grid, VisibleGridRows);
+        var visibleRows = Math.Max(1, Math.Min(contentRows, VisibleGridRows));
+        if (visibleRows == _lastAppliedVisibleRows) return;
+        _lastAppliedVisibleRows = visibleRows;
+
+        ReflectionHelpers.SetGridHeight(grid, visibleRows);
 
         var elementSpace = ReflectionHelpers.GetGridElementSpace(grid);
         var elementPrefab = ReflectionHelpers.GetGridElementPrefab(grid);
@@ -343,7 +347,7 @@ public sealed class TerminalUIManager
         if (elementPrefab != null && elementPrefab.TryGetComponent<RectTransform>(out var elementRect))
             cellHeight = elementRect.sizeDelta.y;
 
-        var addedRows = Math.Max(0, VisibleGridRows - _originalGridHeight);
+        var addedRows = Math.Max(0, visibleRows - _originalGridHeight);
         var addedHeight = (cellHeight + elementSpace) * addedRows;
         _containerRect.sizeDelta = new Vector2(_originalContainerSize.x, _originalContainerSize.y + addedHeight);
 
@@ -378,6 +382,7 @@ public sealed class TerminalUIManager
             _containerRect.sizeDelta = _originalContainerSize;
 
         _layoutCaptured = false;
+        _lastAppliedVisibleRows = -1;
     }
 
     public bool IsLayoutCaptured => _layoutCaptured;

@@ -17,7 +17,7 @@ public sealed class ContainerScanner : IContainerScanner
         _config = config;
     }
 
-    public IReadOnlyList<ChestHandle> GetNearbyContainers(Vector3 center, float radius, Container? ignoreContainer = null, bool onlyVanillaChests = false)
+    public IReadOnlyList<ChestHandle> GetNearbyContainers(Vector3 center, float radius, Container? ignoreContainer = null)
     {
         var maxCount = _config.MaxContainersScanned.Value;
         var nearby = Object
@@ -26,7 +26,6 @@ public sealed class ContainerScanner : IContainerScanner
             .Where(IsStaticChest)
             .Where(container => ignoreContainer == null || container != ignoreContainer)
             .Where(container => !UnifiedTerminal.IsTerminal(container))
-            .Where(container => !onlyVanillaChests || ChestInclusionRules.IsVanillaChest(container))
             .Where(ChestInclusionRules.IsIncludedInUnified)
             .Select(container =>
             {
