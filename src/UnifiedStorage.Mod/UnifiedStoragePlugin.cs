@@ -81,6 +81,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _harmony.PatchAll(typeof(ZInputGetKeyPatch));
         _harmony.PatchAll(typeof(ZInputGetKeyDownPatch));
         _harmony.PatchAll(typeof(ZInputGetKeyUpPatch));
+        _harmony.PatchAll(typeof(ChatHasFocusPatch));
         _harmony.PatchAll(typeof(ContainerHoverTextPatch));
 
         Logger.LogInfo($"{PluginName} v{PluginVersion} loaded.");
