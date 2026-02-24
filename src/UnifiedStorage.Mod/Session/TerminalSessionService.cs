@@ -664,7 +664,12 @@ public sealed class TerminalSessionService
 
     private string GetDisplayName(ItemKey key)
     {
-        if (_prototypes.TryGetValue(key, out var prototype)) return prototype.m_shared.m_name;
+        if (_prototypes.TryGetValue(key, out var prototype))
+        {
+            var raw = prototype.m_shared.m_name;
+            var localized = Localization.instance?.Localize(raw);
+            return !string.IsNullOrEmpty(localized) ? localized : raw;
+        }
         return key.PrefabName;
     }
 
