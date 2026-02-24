@@ -1,0 +1,10 @@
+{
+  "name": "UnifiedStorage",
+  "version_number": "1.1.2",
+  "website_url": "https://github.com/Caracioly/UnifiedStorage",
+  "description": "Unified Chest Terminal for Valheim: native chest UI with nearby storage aggregation, search and scroll.",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2202",
+    "ValheimModding-Jotunn-2.27.1"
+  ]
+}
