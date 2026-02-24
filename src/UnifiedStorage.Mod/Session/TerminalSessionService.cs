@@ -203,10 +203,8 @@ public sealed class TerminalSessionService
 
     public void EndSession()
     {
-        if (!IsActive)
-            return;
-
-        _trace.Dev("Terminal closed.");
+        if (IsActive)
+            _trace.Dev("Terminal closed.");
         if (_terminal != null && !string.IsNullOrWhiteSpace(_terminalUid))
         {
             _routes.RequestCloseSession(new CloseSessionRequestDto
