@@ -19,7 +19,7 @@ public sealed class ContainerScanner : IContainerScanner
 
     public IReadOnlyList<ChestHandle> GetNearbyContainers(Vector3 center, float radius, Container? ignoreContainer = null)
     {
-        var maxCount = _config.MaxContainersScanned.Value;
+        var maxCount = _config.MaxContainersScanned;
         var nearby = Object
             .FindObjectsByType<Container>(FindObjectsSortMode.None)
             .Where(container => container != null)

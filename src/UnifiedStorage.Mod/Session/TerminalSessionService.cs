@@ -133,7 +133,7 @@ public sealed class TerminalSessionService
         _sessionId = string.Empty;
         _terminalUid = ReflectionHelpers.BuildContainerUid(terminal);
         _pendingCloseSince = -1f;
-        _scanRadius = _config.TerminalRangeOverride.Value > 0 ? _config.TerminalRangeOverride.Value : _config.ScanRadius.Value;
+        _scanRadius = _config.ScanRadius.Value;
         CaptureOriginalInventorySize(terminal.GetInventory());
         _revision = 0;
         _slotsTotalPhysical = 0;

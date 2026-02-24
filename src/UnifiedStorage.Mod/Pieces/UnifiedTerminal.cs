@@ -10,7 +10,7 @@ public sealed class UnifiedTerminal : MonoBehaviour
     private bool _tintApplied;
     private bool _tintEnabled = true;
     private Color _tintColor = new(0.431f, 0.659f, 0.290f, 1f);
-    private float _tintStrength = 0.35f;
+    private float _tintStrength = 0.55f;
 
     public static bool IsTerminal(Container? container)
     {
@@ -42,6 +42,9 @@ public sealed class UnifiedTerminal : MonoBehaviour
         if (!_tintEnabled || _tintApplied || _tintStrength <= 0f)
             return;
 
+        var effectiveTintStrength = Mathf.Clamp01(_tintStrength * 1.7f);
+        var emissionBoost = 0.16f * effectiveTintStrength;
+
         _tintApplied = true;
         foreach (var renderer in GetComponentsInChildren<Renderer>(true))
         {
@@ -57,13 +60,13 @@ public sealed class UnifiedTerminal : MonoBehaviour
                 if (material.HasProperty("_Color"))
                 {
                     var current = material.GetColor("_Color");
-                    material.SetColor("_Color", Color.Lerp(current, _tintColor, _tintStrength));
+                    material.SetColor("_Color", Color.Lerp(current, _tintColor, effectiveTintStrength));
                 }
 
                 if (material.HasProperty("_EmissionColor"))
                 {
                     var emission = material.GetColor("_EmissionColor");
-                    material.SetColor("_EmissionColor", emission + (_tintColor * (0.10f * _tintStrength)));
+                    material.SetColor("_EmissionColor", emission + (_tintColor * emissionBoost));
                     material.EnableKeyword("_EMISSION");
                 }
             }

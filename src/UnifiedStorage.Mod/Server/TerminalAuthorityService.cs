@@ -441,7 +441,7 @@ public sealed class TerminalAuthorityService
             if (remaining <= 0) break;
             var inv = chest.Container.GetInventory();
             if (inv == null) continue;
-            if (_config.RequireAccessCheck.Value && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
+            if (_config.RequireAccessCheck && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
 
             foreach (var item in inv.GetAllItems().Where(i => ReflectionHelpers.MatchKey(i, key)).ToList())
             {
@@ -465,7 +465,7 @@ public sealed class TerminalAuthorityService
             if (remaining <= 0) break;
             var inv = chest.Container.GetInventory();
             if (inv == null) continue;
-            if (_config.RequireAccessCheck.Value && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
+            if (_config.RequireAccessCheck && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
 
             var movedInChest = ChunkedTransfer.Move(remaining, maxStack, chunkAmount =>
             {
@@ -561,7 +561,7 @@ public sealed class TerminalAuthorityService
         {
             var inv = chest.Container.GetInventory();
             if (inv == null) continue;
-            if (_config.RequireAccessCheck.Value && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
+            if (_config.RequireAccessCheck && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
             var items = inv.GetAllItems();
             foreach (var item in items)
             {

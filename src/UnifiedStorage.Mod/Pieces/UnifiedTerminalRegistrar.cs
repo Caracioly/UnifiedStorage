@@ -35,7 +35,7 @@ public sealed class UnifiedTerminalRegistrar
 
         var pieceConfig = new PieceConfig
         {
-            Name = _config.TerminalDisplayName.Value,
+            Name = _config.TerminalDisplayName,
             PieceTable = "_HammerPieceTable",
             Category = "Furniture",
             CraftingStation = "piece_workbench"
@@ -63,20 +63,20 @@ public sealed class UnifiedTerminalRegistrar
             terminal = prefab.AddComponent<UnifiedTerminal>();
 
         terminal.ConfigureVisuals(
-            _config.TerminalTintEnabled.Value,
-            _config.TerminalTintColor.Value,
-            _config.TerminalTintStrength.Value);
+            _config.TerminalTintEnabled,
+            _config.TerminalTintColor,
+            _config.TerminalTintStrength);
 
         var piece = prefab.GetComponent<Piece>();
         if (piece != null)
         {
-            piece.m_name = _config.TerminalDisplayName.Value;
+            piece.m_name = _config.TerminalDisplayName;
             piece.m_description = "Access nearby chests in a unified view.";
         }
 
         var container = prefab.GetComponent<Container>();
         if (container != null)
-            ReflectionHelpers.SetContainerDisplayName(container, _config.TerminalDisplayName.Value);
+            ReflectionHelpers.SetContainerDisplayName(container, _config.TerminalDisplayName);
 
         PieceManager.Instance.AddPiece(customPiece);
         _registered = true;
