@@ -21,20 +21,11 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 - Delta broadcast keeps multiple players viewing the same terminal in sync.
 - Core library (`UnifiedStorage.Core`) used for aggregation, search, withdraw/deposit planning.
 
-## Release notes (v1.1.1)
+## Release notes
 
-- Added terminal UI improvements: slot usage bar + live slot counter and integrated search field.
-- Added storage-capacity guardrails to prevent deposits when no chest space is available.
-- Added terminal hover text with nearby chest count for better in-world feedback.
-- Improved terminal interaction validation and nearby-container flow.
-- Refined session and inventory refresh behavior to keep projection and server snapshot aligned.
-- Replaced operation-heavy logs with opt-in development logs via `EnableDevLogs`.
-
-## Release notes (v1.1.2)
-
-- Added localized display names in terminal sessions so item names follow the active game language.
-- Fixed terminal session close flow to avoid stale/incorrect session shutdown behavior.
-- Optimized terminal hover text by caching nearby chest count lookups.
+- See all notes: [release-notes/README.md](release-notes/README.md)
+- `v1.1.2`: [release-notes/v1.1.2.md](release-notes/v1.1.2.md)
+- `v1.1.1`: [release-notes/v1.1.1.md](release-notes/v1.1.1.md)
 
 ## Architecture (v1.1.2)
 
@@ -58,15 +49,8 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 ## Configuration (BepInEx)
 
 - `ScanRadius = 20`
-- `MaxContainersScanned = 128`
-- `RequireAccessCheck = true`
 - `EnableDevLogs = false`
 - `TerminalPieceEnabled = true`
-- `TerminalDisplayName = "Unified Chest"`
-- `TerminalRangeOverride = 0`
-- `TerminalTintEnabled = true`
-- `TerminalTintColor = "#6EA84A"`
-- `TerminalTintStrength = 0.35`
 
 ## Project structure
 
