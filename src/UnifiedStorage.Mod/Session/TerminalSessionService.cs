@@ -140,7 +140,7 @@ public sealed class TerminalSessionService
         _displayedTotals.Clear();
         _prototypes.Clear();
         _stackSizes.Clear();
-        _trace.Info("SESSION", $"Begin term={_terminalUid} player={ResolveLocalPlayerId()} radius={_scanRadius:0.0}");
+        _trace.Dev($"Terminal opened by {_player?.GetPlayerName() ?? "unknown"} (radius {_scanRadius:0.0}m).");
         RefreshTrackedChestHandles();
         RefreshTerminalInventoryFromAuthoritative();
         RequestSessionSnapshot();
@@ -196,7 +196,7 @@ public sealed class TerminalSessionService
 
     public void EndSession()
     {
-        _trace.Info("SESSION", $"End term={_terminalUid} session={_sessionId}");
+        _trace.Dev("Terminal closed.");
         if (_terminal != null && !string.IsNullOrWhiteSpace(_terminalUid))
         {
             _routes.RequestCloseSession(new CloseSessionRequestDto
@@ -259,6 +259,7 @@ public sealed class TerminalSessionService
         if (!IsActive || !CanApplySnapshot(result.Snapshot)) return;
         if (result.Success && !string.IsNullOrWhiteSpace(result.TokenId) && result.ReservedAmount > 0)
         {
+            _trace.Dev($"Withdrew {result.ReservedAmount}x {GetDisplayName(result.Key)}.");
             _pendingReservations.Add(new PendingReservation
             {
                 TokenId = result.TokenId, Key = result.Key,
@@ -339,6 +340,7 @@ public sealed class TerminalSessionService
         if (_authoritativeTotals.Count != previousKeyCount)
             _sortCache.Clear();
 
+        _trace.Dev($"Storage updated: {_chestCount} chest(s), {_authoritativeTotals.Count} item type(s).");
         RefreshTrackedChestHandles();
         RefreshTerminalInventoryFromAuthoritative();
         _uiRevision++;
@@ -600,7 +602,9 @@ public sealed class TerminalSessionService
         var pending = _pendingDeposits.FirstOrDefault(p => string.Equals(p.RequestId, result.RequestId, StringComparison.Ordinal));
         if (pending == null) return;
         _pendingDeposits.Remove(pending);
-        if (!result.Success && ShouldRestoreFailedDeposit(result.Reason))
+        if (result.Success)
+            _trace.Dev($"Deposited {result.AppliedAmount}x {GetDisplayName(pending.Key)}.");
+        else if (ShouldRestoreFailedDeposit(result.Reason))
             RestoreToLocalPlayerInventory(pending.Key, pending.Amount);
     }
 

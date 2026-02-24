@@ -9,9 +9,7 @@ public sealed class StorageConfig
         ScanRadius = config.Bind("General", "ScanRadius", 20f, "Radius in meters used to include nearby chests.");
         MaxContainersScanned = config.Bind("General", "MaxContainersScanned", 128, "Hard cap for nearby containers scan.");
         RequireAccessCheck = config.Bind("General", "RequireAccessCheck", true, "If true, server checks chest access before reading/removing.");
-        EnableOperationLogs = config.Bind("Debug", "EnableOperationLogs", true, "Enable structured operation logs for open/withdraw/deposit/commit/cancel flows.");
-        EnableVerboseOperationLogs = config.Bind("Debug", "EnableVerboseOperationLogs", false, "Enable verbose per-item and per-chest logs (can be noisy).");
-        SnapshotItemLogLimit = config.Bind("Debug", "SnapshotItemLogLimit", 12, "Maximum number of items shown in verbose snapshot logs.");
+        EnableDevLogs = config.Bind("Debug", "EnableDevLogs", false, "Enable dev logs: session open/close, deposits, withdrawals, and storage updates.");
         TerminalPieceEnabled = config.Bind("Terminal", "TerminalPieceEnabled", true, "Enable Unified Chest terminal piece.");
         TerminalDisplayName = config.Bind("Terminal", "TerminalDisplayName", "Unified Chest", "Display name for terminal piece.");
         TerminalRangeOverride = config.Bind("Terminal", "TerminalRangeOverride", 0f, "If > 0, overrides ScanRadius for terminal network.");
@@ -23,9 +21,7 @@ public sealed class StorageConfig
     public ConfigEntry<float> ScanRadius { get; }
     public ConfigEntry<int> MaxContainersScanned { get; }
     public ConfigEntry<bool> RequireAccessCheck { get; }
-    public ConfigEntry<bool> EnableOperationLogs { get; }
-    public ConfigEntry<bool> EnableVerboseOperationLogs { get; }
-    public ConfigEntry<int> SnapshotItemLogLimit { get; }
+    public ConfigEntry<bool> EnableDevLogs { get; }
     public ConfigEntry<bool> TerminalPieceEnabled { get; }
     public ConfigEntry<string> TerminalDisplayName { get; }
     public ConfigEntry<float> TerminalRangeOverride { get; }

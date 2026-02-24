@@ -5,7 +5,6 @@ using System.Reflection;
 using BepInEx.Logging;
 using UnifiedStorage.Core;
 using UnifiedStorage.Mod.Config;
-using UnifiedStorage.Mod.Diagnostics;
 using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Models;
 using UnifiedStorage.Mod.Pieces;
@@ -24,15 +23,13 @@ public sealed class TerminalAuthorityService
     private readonly StorageConfig _config;
     private readonly IContainerScanner _scanner;
     private readonly ManualLogSource _logger;
-    private readonly StorageTrace _trace;
     private readonly Dictionary<string, TerminalState> _states = new(StringComparer.Ordinal);
 
-    public TerminalAuthorityService(StorageConfig config, IContainerScanner scanner, ManualLogSource logger, StorageTrace trace)
+    public TerminalAuthorityService(StorageConfig config, IContainerScanner scanner, ManualLogSource logger)
     {
         _config = config;
         _scanner = scanner;
         _logger = logger;
-        _trace = trace;
     }
 
     public event Action<IReadOnlyCollection<long>, SessionDeltaDto>? DeltaReady;
@@ -84,7 +81,6 @@ public sealed class TerminalAuthorityService
     {
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Open sender={sender} req={request.RequestId} session={request.SessionId} term={request.TerminalUid} player={request.PlayerId}");
             if (string.IsNullOrWhiteSpace(request.TerminalUid))
                 return new OpenSessionResponseDto { RequestId = request.RequestId, Success = false, Reason = "Invalid terminal" };
 
@@ -96,7 +92,6 @@ public sealed class TerminalAuthorityService
 
             state.Subscribers.Add(sender);
             var snapshot = BuildSnapshot(state);
-            _trace.Info("AUTH", $"Open accepted sender={sender} {_trace.SnapshotSummary(snapshot)}");
             return new OpenSessionResponseDto { RequestId = request.RequestId, Success = true, Snapshot = snapshot };
         }
     }
@@ -107,7 +102,6 @@ public sealed class TerminalAuthorityService
         ReserveWithdrawResultDto result;
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Reserve sender={sender} op={request.OperationId} key={StorageTrace.Item(request.Key)} amount={request.Amount}");
             var state = GetState(request.TerminalUid);
             if (state == null) return ReserveFailure(request, "Session not found");
 
@@ -155,7 +149,6 @@ public sealed class TerminalAuthorityService
     {
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Commit sender={sender} token={request.TokenId}");
             var state = GetState(request.TerminalUid);
             if (state == null) return ApplyFailure(request.RequestId, request.TokenId ?? "", "Session not found", operationType: "commit");
 
@@ -192,7 +185,6 @@ public sealed class TerminalAuthorityService
         ApplyResultDto result;
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Cancel sender={sender} token={request.TokenId} amount={request.Amount}");
             var state = GetState(request.TerminalUid);
             if (state == null) return ApplyFailure(request.RequestId, request.TokenId ?? "", "Session not found", operationType: "cancel");
 
@@ -251,7 +243,6 @@ public sealed class TerminalAuthorityService
         ApplyResultDto result;
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Deposit sender={sender} key={StorageTrace.Item(request.Key)} amount={request.Amount}");
             var state = GetState(request.TerminalUid);
             if (state == null) return ApplyFailure(request.RequestId, "", "Session not found", operationType: "deposit");
 
@@ -315,7 +306,6 @@ public sealed class TerminalAuthorityService
         List<(IReadOnlyCollection<long> Peers, SessionDeltaDto Delta)> deltas = new();
         lock (_sync)
         {
-            _trace.Info("AUTH", $"Close sender={sender} session={request.SessionId} term={request.TerminalUid}");
             var state = GetState(request.TerminalUid);
             if (state == null) return;
 

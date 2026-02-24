@@ -42,9 +42,7 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 - `ScanRadius = 20`
 - `MaxContainersScanned = 128`
 - `RequireAccessCheck = true`
-- `EnableOperationLogs = true`
-- `EnableVerboseOperationLogs = false`
-- `SnapshotItemLogLimit = 12`
+- `EnableDevLogs = false`
 - `TerminalPieceEnabled = true`
 - `TerminalDisplayName = "Unified Chest"`
 - `TerminalRangeOverride = 0`
