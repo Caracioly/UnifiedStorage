@@ -23,10 +23,10 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 
 ## Release notes
 
-- See all notes: [release-notes/README.md](release-notes/README.md)
-- `v1.1.3`: [release-notes/v1.1.3.md](release-notes/v1.1.3.md)
-- `v1.1.2`: [release-notes/v1.1.2.md](release-notes/v1.1.2.md)
-- `v1.1.1`: [release-notes/v1.1.1.md](release-notes/v1.1.1.md)
+- See all notes: [release-notes/README.md](https://github.com/Caracioly/UnifiedStorage/blob/main/release-notes/README.md)
+- `v1.1.3`: [release-notes/v1.1.3.md](https://github.com/Caracioly/UnifiedStorage/blob/main/release-notes/v1.1.3.md)
+- `v1.1.2`: [release-notes/v1.1.2.md](https://github.com/Caracioly/UnifiedStorage/blob/main/release-notes/v1.1.2.md)
+- `v1.1.1`: [release-notes/v1.1.1.md](https://github.com/Caracioly/UnifiedStorage/blob/main/release-notes/v1.1.1.md)
 
 ## Architecture (v1.1.3)
 
