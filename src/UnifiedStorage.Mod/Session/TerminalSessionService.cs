@@ -112,7 +112,7 @@ public sealed class TerminalSessionService
         if (!IsActive || inventory == null || _terminal == null) return false;
         var terminalInventory = _terminal.GetInventory();
         if (ReferenceEquals(inventory, terminalInventory)) return false;
-        return _trackedChests.Any(chest => ReferenceEquals(inventory, chest.Container.GetInventory()));
+        return _trackedChests.Any(chest => chest.Source.OwnsInventory(inventory));
     }
 
     public bool HandleContainerInteract(Container container, Player player)

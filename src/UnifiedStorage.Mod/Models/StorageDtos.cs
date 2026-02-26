@@ -1,19 +1,20 @@
 using System.Collections.Generic;
 using UnifiedStorage.Core;
+using UnifiedStorage.Mod.Domain;
 
 namespace UnifiedStorage.Mod.Models;
 
 public sealed class ChestHandle
 {
-    public ChestHandle(string sourceId, Container container, float distance)
+    public ChestHandle(string sourceId, IStorageSource source, float distance)
     {
         SourceId = sourceId;
-        Container = container;
+        Source = source;
         Distance = distance;
     }
 
     public string SourceId { get; }
-    public Container Container { get; }
+    public IStorageSource Source { get; }
     public float Distance { get; }
 }
 

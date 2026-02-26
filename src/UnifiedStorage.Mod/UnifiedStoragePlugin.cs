@@ -52,7 +52,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _trace = new StorageTrace(Logger, _config);
 
         _scanner = new ContainerScanner(_config);
-        _authority = new TerminalAuthorityService(_config, _scanner, Logger);
+        _authority = new TerminalAuthorityService(_scanner, Logger);
         _rpcRoutes = new TerminalRpcRoutes(_authority, Logger);
         _rpcRoutes.EnsureRegistered();
         _session = new TerminalSessionService(_config, _scanner, _rpcRoutes, Logger, _trace);

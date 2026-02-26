@@ -4,7 +4,6 @@ using System.Linq;
 using System.Reflection;
 using BepInEx.Logging;
 using UnifiedStorage.Core;
-using UnifiedStorage.Mod.Config;
 using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Models;
 using UnifiedStorage.Mod.Pieces;
@@ -20,14 +19,12 @@ public sealed class TerminalAuthorityService
     private const int MaxOperationHistory = 2048;
 
     private readonly object _sync = new();
-    private readonly StorageConfig _config;
     private readonly IContainerScanner _scanner;
     private readonly ManualLogSource _logger;
     private readonly Dictionary<string, TerminalState> _states = new(StringComparer.Ordinal);
 
-    public TerminalAuthorityService(StorageConfig config, IContainerScanner scanner, ManualLogSource logger)
+    public TerminalAuthorityService(IContainerScanner scanner, ManualLogSource logger)
     {
-        _config = config;
         _scanner = scanner;
         _logger = logger;
     }
@@ -373,22 +370,17 @@ public sealed class TerminalAuthorityService
         var slotsTotal = 0;
         foreach (var chest in state.Chests)
         {
-            var inventory = chest.Container.GetInventory();
-            if (inventory == null) continue;
-            slotsTotal += ReflectionHelpers.GetInventoryWidth(inventory) * ReflectionHelpers.GetInventoryHeight(inventory);
+            if (!chest.Source.IsValid) continue;
+            slotsTotal += chest.Source.PhysicalSlotCount;
 
-            foreach (var item in inventory.GetAllItems())
+            foreach (var stack in chest.Source.ReadStacks())
             {
-                if (item?.m_dropPrefab == null || item.m_stack <= 0) continue;
-                var key = new ItemKey(item.m_dropPrefab.name, item.m_quality, item.m_variant);
-                if (!prototypes.ContainsKey(key)) prototypes[key] = item.Clone();
-
-                sourceStacks.Add(new SourceStack
+                if (!prototypes.ContainsKey(stack.Key))
                 {
-                    Key = key, DisplayName = item.m_shared.m_name,
-                    Amount = item.m_stack, StackSize = item.m_shared.m_maxStackSize,
-                    Distance = chest.Distance, SourceId = chest.SourceId
-                });
+                    var proto = chest.Source.GetItemPrototype(stack.Key);
+                    if (proto != null) prototypes[stack.Key] = proto;
+                }
+                sourceStacks.Add(stack);
             }
         }
 
@@ -432,48 +424,32 @@ public sealed class TerminalAuthorityService
         state.Chests = _scanner.GetNearbyContainers(state.AnchorPosition, state.Radius, terminal).ToList();
     }
 
-    private int RemoveFromChests(TerminalState state, ItemKey key, int amount, Player? player)
+    private static int RemoveFromChests(TerminalState state, ItemKey key, int amount, Player? player)
     {
         if (amount <= 0) return 0;
         var remaining = amount;
         foreach (var chest in state.Chests.OrderBy(c => c.Distance).ThenBy(c => c.SourceId, StringComparer.Ordinal))
         {
             if (remaining <= 0) break;
-            var inv = chest.Container.GetInventory();
-            if (inv == null) continue;
-            if (_config.RequireAccessCheck && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
-
-            foreach (var item in inv.GetAllItems().Where(i => ReflectionHelpers.MatchKey(i, key)).ToList())
-            {
-                if (remaining <= 0) break;
-                var take = Math.Min(item.m_stack, remaining);
-                inv.RemoveItem(item, take);
-                remaining -= take;
-            }
+            if (!chest.Source.IsValid) continue;
+            if (!chest.Source.CanPlayerAccess(player)) continue;
+            var removed = chest.Source.RemoveItems(key, remaining);
+            remaining -= removed;
         }
         return amount - remaining;
     }
 
-    private int AddToChests(TerminalState state, ItemKey key, int amount, Player? player)
+    private static int AddToChests(TerminalState state, ItemKey key, int amount, Player? player)
     {
         if (amount <= 0) return 0;
-        var maxStack = ReflectionHelpers.GetMaxStackSize(key);
-        if (maxStack <= 0) maxStack = 1;
         var remaining = amount;
         foreach (var chest in state.Chests.OrderBy(c => c.Distance).ThenBy(c => c.SourceId, StringComparer.Ordinal))
         {
             if (remaining <= 0) break;
-            var inv = chest.Container.GetInventory();
-            if (inv == null) continue;
-            if (_config.RequireAccessCheck && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
-
-            var movedInChest = ChunkedTransfer.Move(remaining, maxStack, chunkAmount =>
-            {
-                var stack = ReflectionHelpers.CreateItemStack(key, chunkAmount);
-                if (stack == null) return 0;
-                return ReflectionHelpers.TryAddItemMeasured(inv, key, stack, chunkAmount);
-            });
-            remaining -= movedInChest;
+            if (!chest.Source.IsValid) continue;
+            if (!chest.Source.CanPlayerAccess(player)) continue;
+            var added = chest.Source.AddItems(key, remaining);
+            remaining -= added;
         }
         return amount - remaining;
     }
@@ -553,22 +529,15 @@ public sealed class TerminalAuthorityService
         });
     }
 
-    private bool HasAnyCapacityFor(TerminalState state, ItemKey key, Player? player)
+    private static bool HasAnyCapacityFor(TerminalState state, ItemKey key, Player? player)
     {
         var maxStack = ReflectionHelpers.GetMaxStackSize(key);
         if (maxStack <= 0) maxStack = 1;
         foreach (var chest in state.Chests)
         {
-            var inv = chest.Container.GetInventory();
-            if (inv == null) continue;
-            if (_config.RequireAccessCheck && player != null && !ReflectionHelpers.CanAccess(chest.Container, player)) continue;
-            var items = inv.GetAllItems();
-            foreach (var item in items)
-            {
-                if (ReflectionHelpers.MatchKey(item, key) && item.m_stack < maxStack) return true;
-            }
-            var totalSlots = ReflectionHelpers.GetInventoryWidth(inv) * ReflectionHelpers.GetInventoryHeight(inv);
-            if (items.Count < totalSlots) return true;
+            if (!chest.Source.IsValid) continue;
+            if (!chest.Source.CanPlayerAccess(player)) continue;
+            if (chest.Source.HasCapacityFor(key, maxStack)) return true;
         }
         return false;
     }

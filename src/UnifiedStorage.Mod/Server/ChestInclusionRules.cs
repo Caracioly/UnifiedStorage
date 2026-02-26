@@ -32,7 +32,12 @@ public static class ChestInclusionRules
             return false;
         }
 
-        var zdo = container.GetComponent<ZNetView>()?.GetZDO();
+        return IsIncludedInUnified(container.GetComponent<ZNetView>());
+    }
+
+    public static bool IsIncludedInUnified(ZNetView? znetView)
+    {
+        var zdo = znetView?.GetZDO();
         if (zdo == null)
         {
             return true;
@@ -48,7 +53,11 @@ public static class ChestInclusionRules
             return false;
         }
 
-        var znetView = container.GetComponent<ZNetView>();
+        return TrySetIncludedInUnified(container.GetComponent<ZNetView>(), includeInUnified);
+    }
+
+    public static bool TrySetIncludedInUnified(ZNetView? znetView, bool includeInUnified)
+    {
         var zdo = znetView?.GetZDO();
         if (zdo == null)
         {
