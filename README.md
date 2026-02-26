@@ -2,7 +2,7 @@
 
 Unified storage for Valheim using a dedicated terminal, without changing vanilla chest behavior.
 
-## Current state (v1.1.3)
+## Current state (v1.1.4)
 
 - New placeable: `Unified Chest` (via Jotunn) with custom `Interactable`.
 - Opening the terminal uses Valheim's native chest UI.
