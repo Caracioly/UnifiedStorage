@@ -43,6 +43,7 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 ## Configuration (BepInEx)
 
 - `ScanRadius = 20`
+- `MaxContainersScanned = 128` (global cap; increasing this can significantly impact performance)
 - `EnableDevLogs = false`
 - `TerminalPieceEnabled = true`
 
