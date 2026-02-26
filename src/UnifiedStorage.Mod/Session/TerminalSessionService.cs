@@ -107,6 +107,23 @@ public sealed class TerminalSessionService
         }
     }
 
+    public bool HasDrawerPriorityFor(ItemKey key)
+    {
+        return _trackedChests.Any(c => c.Source.IsValid && c.Source.DepositPriority(key) == 0);
+    }
+
+    public bool HasAnyCapacityFor(ItemKey key)
+    {
+        var maxStack = ReflectionHelpers.GetMaxStackSize(key);
+        if (maxStack <= 0) maxStack = 1;
+        foreach (var c in _trackedChests)
+        {
+            if (!c.Source.IsValid) continue;
+            if (c.Source.HasCapacityFor(key, maxStack)) return true;
+        }
+        return false;
+    }
+
     public bool IsTrackedInventory(Inventory inventory)
     {
         if (!IsActive || inventory == null || _terminal == null) return false;

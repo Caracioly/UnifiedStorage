@@ -26,7 +26,20 @@ public sealed class DrawerStorageSource : IStorageSource
         && _snapshot.ZNetView.isActiveAndEnabled
         && _snapshot.ZNetView.GetZDO() != null;
 
-    public int PhysicalSlotCount => 1;
+    public int PhysicalSlotCount
+    {
+        get
+        {
+            if (!IsValid) return 0;
+            var zdo = _snapshot.ZNetView.GetZDO();
+            var amount = zdo.GetInt("Amount");
+            var prefab = zdo.GetString("Prefab");
+            var stackSize = ReflectionHelpers.ResolveMaxStackSize(prefab);
+            if (stackSize <= 0) stackSize = 1;
+            // +1 because drawers have unlimited capacity — always leave one free display slot
+            return (int)Math.Ceiling((double)amount / stackSize) + 1;
+        }
+    }
 
     public IReadOnlyList<SourceStack> ReadStacks()
     {
@@ -63,6 +76,18 @@ public sealed class DrawerStorageSource : IStorageSource
     }
 
     public bool CanPlayerAccess(Player? player) => true;
+
+    public int DepositPriority(ItemKey key)
+    {
+        if (!IsValid) return 1;
+        var zdo = _snapshot.ZNetView.GetZDO();
+        var currentAmount = zdo.GetInt("Amount");
+        if (currentAmount <= 0) return 1;
+        var currentPrefab = zdo.GetString("Prefab");
+        var currentQuality = zdo.GetInt("Quality", 1);
+        return string.Equals(currentPrefab, key.PrefabName, StringComparison.Ordinal)
+               && currentQuality == key.Quality ? 0 : 1;
+    }
 
     public bool HasCapacityFor(ItemKey key, int maxStack)
     {

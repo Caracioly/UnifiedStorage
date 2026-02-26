@@ -2,6 +2,7 @@
 using BepInEx;
 using HarmonyLib;
 using Jotunn.Managers;
+using UnifiedStorage.Core;
 using UnifiedStorage.Mod.Config;
 using UnifiedStorage.Mod.Diagnostics;
 using UnifiedStorage.Mod.Domain;
@@ -183,11 +184,25 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
     internal static bool ShouldBlockGameInput() => _blockGameInput;
     internal bool IsUnifiedSessionActive() => _session != null && _session.IsActive;
 
-    internal bool ShouldBlockDeposit(Inventory targetInventory)
+    private float _storagFullMessageCooldown;
+
+    internal bool ShouldBlockDeposit(Inventory targetInventory, ItemDrop.ItemData? item = null)
     {
         if (_session == null || !_session.IsActive || _session.IsApplyingProjection) return false;
         if (!_session.IsTerminalInventory(targetInventory)) return false;
-        return _session.IsStorageFull;
+        if (item?.m_dropPrefab == null) return _session.IsStorageFull;
+        var key = new ItemKey(item.m_dropPrefab.name, item.m_quality, item.m_variant);
+        if (_session.HasAnyCapacityFor(key)) return false;
+        NotifyStorageFull();
+        return true;
+    }
+
+    private void NotifyStorageFull()
+    {
+        var now = Time.unscaledTime;
+        if (now < _storagFullMessageCooldown) return;
+        _storagFullMessageCooldown = now + 2.5f;
+        Player.m_localPlayer?.Message(MessageHud.MessageType.Center, "Storage is full.");
     }
 
     internal int GetNearbyChestCount(Vector3 position)

@@ -443,7 +443,10 @@ public sealed class TerminalAuthorityService
     {
         if (amount <= 0) return 0;
         var remaining = amount;
-        foreach (var chest in state.Chests.OrderBy(c => c.Distance).ThenBy(c => c.SourceId, StringComparer.Ordinal))
+        foreach (var chest in state.Chests
+            .OrderBy(c => c.Source.DepositPriority(key))
+            .ThenBy(c => c.Distance)
+            .ThenBy(c => c.SourceId, StringComparer.Ordinal))
         {
             if (remaining <= 0) break;
             if (!chest.Source.IsValid) continue;

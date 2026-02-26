@@ -2,7 +2,7 @@
 
 Unified storage for Valheim using a dedicated terminal, without changing vanilla chest behavior.
 
-## Current state (v1.1.4)
+## Current state
 
 - New placeable: `Unified Chest` (via Jotunn) with custom `Interactable`.
 - Opening the terminal uses Valheim's native chest UI.
@@ -28,14 +28,6 @@ Unified storage for Valheim using a dedicated terminal, without changing vanilla
 - `v1.1.3`: [release-notes/v1.1.3.md](https://github.com/Caracioly/UnifiedStorage/blob/main/release-notes/v1.1.3.md)
 - `v1.1.2`: [release-notes/v1.1.2.md](https://github.com/Caracioly/UnifiedStorage/blob/main/release-notes/v1.1.2.md)
 - `v1.1.1`: [release-notes/v1.1.1.md](https://github.com/Caracioly/UnifiedStorage/blob/main/release-notes/v1.1.1.md)
-
-## Architecture (v1.1.3)
-
-- `UnifiedTerminal` implements `Interactable` + `Hoverable` directly (no `Container.Interact` patch needed).
-- `ReflectionHelpers` centralizes all reflection-based access to Valheim internals.
-- `TerminalUIManager` owns all UI creation and layout management.
-- `TerminalSessionService` manages client-side session state and authoritative projection.
-- `TerminalAuthorityService` handles server-side authorization, reservations, and conflict checks.
 
 ## Scope
 

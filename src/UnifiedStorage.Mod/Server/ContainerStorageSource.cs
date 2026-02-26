@@ -76,6 +76,8 @@ public sealed class ContainerStorageSource : IStorageSource
         return ReflectionHelpers.CanAccess(_container, player);
     }
 
+    public int DepositPriority(ItemKey key) => 1;
+
     public bool HasCapacityFor(ItemKey key, int maxStack)
     {
         var inv = _container.GetInventory();

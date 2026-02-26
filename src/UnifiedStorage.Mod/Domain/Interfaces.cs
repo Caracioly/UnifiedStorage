@@ -15,6 +15,7 @@ public interface IStorageSource
     ItemDrop.ItemData? GetItemPrototype(ItemKey key);
     bool CanPlayerAccess(Player? player);
     bool HasCapacityFor(ItemKey key, int maxStack);
+    int DepositPriority(ItemKey key);
     int RemoveItems(ItemKey key, int amount);
     int AddItems(ItemKey key, int amount);
     bool OwnsInventory(Inventory inventory);
