@@ -51,6 +51,7 @@ public sealed class TerminalSessionService
     private bool _isApplyingProjection;
     private bool _hasAuthoritativeSnapshot;
     private int _slotsTotalPhysical;
+    private int _slotsUsedDisplay;
     private int _chestCount;
     private long _revision;
     private int _openSessionFailureCount;
@@ -81,10 +82,11 @@ public sealed class TerminalSessionService
     public bool IsActive => _terminal != null && _player != null;
     public bool IsApplyingProjection => _isApplyingProjection;
     public int SlotsTotalPhysical => _slotsTotalPhysical;
+    public int SlotsUsedDisplay => _slotsUsedDisplay;
     public int ChestsInRange => _chestCount;
     public int UiRevision => _uiRevision;
     public int ContentRows => _contentRows;
-    public bool IsStorageFull => _slotsTotalPhysical > 0 && SlotsUsedVirtual >= _slotsTotalPhysical;
+    public bool IsStorageFull => _slotsTotalPhysical > 0 && _slotsUsedDisplay >= _slotsTotalPhysical;
 
     public bool IsTerminalInventory(Inventory inventory)
     {
@@ -154,6 +156,7 @@ public sealed class TerminalSessionService
         CaptureOriginalInventorySize(terminal.GetInventory());
         _revision = 0;
         _slotsTotalPhysical = 0;
+        _slotsUsedDisplay = 0;
         _chestCount = 0;
         _hasAuthoritativeSnapshot = false;
         _openSessionFailureCount = 0;
@@ -258,6 +261,7 @@ public sealed class TerminalSessionService
         _sortedItems.Clear();
         _lastProjectedContentHash = 0;
         _slotsTotalPhysical = 0;
+        _slotsUsedDisplay = 0;
         _chestCount = 0;
         _revision = 0;
         _hasAuthoritativeSnapshot = false;
@@ -335,6 +339,7 @@ public sealed class TerminalSessionService
         if (!string.IsNullOrWhiteSpace(snapshot.SessionId)) _sessionId = snapshot.SessionId;
         _revision = snapshot.Revision;
         _slotsTotalPhysical = snapshot.SlotsTotalPhysical;
+        _slotsUsedDisplay = snapshot.SlotsUsedVirtual;
         _chestCount = snapshot.ChestCount;
         _hasAuthoritativeSnapshot = true;
         _openSessionFailureCount = 0;
@@ -397,7 +402,7 @@ public sealed class TerminalSessionService
                 totalVirtualStacks += (int)Math.Ceiling(kvp.Value / (double)maxStack);
             }
 
-            var reserveOneSlot = _slotsTotalPhysical > SlotsUsedVirtual ? 1 : 0;
+            var reserveOneSlot = _slotsTotalPhysical > _slotsUsedDisplay ? 1 : 0;
             var requiredSlots = Math.Max(1, totalVirtualStacks + reserveOneSlot);
             _contentRows = Math.Max(1, (int)Math.Ceiling(requiredSlots / (float)width));
             ReflectionHelpers.SetInventorySize(inventory, width, _contentRows);

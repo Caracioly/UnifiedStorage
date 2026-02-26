@@ -26,18 +26,15 @@ public sealed class DrawerStorageSource : IStorageSource
         && _snapshot.ZNetView.isActiveAndEnabled
         && _snapshot.ZNetView.GetZDO() != null;
 
-    public int PhysicalSlotCount
+    public int PhysicalSlotCount => IsValid ? 1 : 0;
+
+    public int DisplaySlotsUsed
     {
         get
         {
             if (!IsValid) return 0;
             var zdo = _snapshot.ZNetView.GetZDO();
-            var amount = zdo.GetInt("Amount");
-            var prefab = zdo.GetString("Prefab");
-            var stackSize = ReflectionHelpers.ResolveMaxStackSize(prefab);
-            if (stackSize <= 0) stackSize = 1;
-            // +1 because drawers have unlimited capacity — always leave one free display slot
-            return (int)Math.Ceiling((double)amount / stackSize) + 1;
+            return zdo.GetInt("Amount") > 0 ? 1 : 0;
         }
     }
 

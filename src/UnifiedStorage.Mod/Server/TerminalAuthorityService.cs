@@ -403,11 +403,18 @@ public sealed class TerminalAuthorityService
         state.ChestCount = state.Chests.Count;
         state.SlotsTotalPhysical = slotsTotal;
 
+        var displaySlotsUsed = 0;
+        foreach (var chest in state.Chests)
+        {
+            if (!chest.Source.IsValid) continue;
+            displaySlotsUsed += chest.Source.DisplaySlotsUsed;
+        }
+
         var snapshot = new SessionSnapshotDto
         {
             SessionId = state.SessionId, TerminalUid = state.TerminalUid,
             Revision = state.Revision, SlotsTotalPhysical = slotsTotal,
-            SlotsUsedVirtual = AggregationService.CalculateVirtualSlots(orderedItems),
+            SlotsUsedVirtual = displaySlotsUsed,
             ChestCount = state.ChestCount, Items = orderedItems
         };
 

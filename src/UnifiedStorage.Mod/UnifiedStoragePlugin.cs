@@ -172,7 +172,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         if (_session.UiRevision != _lastUiRevision)
         {
             _lastUiRevision = _session.UiRevision;
-            _ui.UpdateMetaText(_session.SlotsUsedVirtual, _session.SlotsTotalPhysical, _session.ChestsInRange);
+            _ui.UpdateMetaText(_session.SlotsUsedDisplay, _session.SlotsTotalPhysical, _session.ChestsInRange);
             _ui.RefreshContainerGrid(gui);
         }
 
@@ -226,7 +226,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
             return;
         _trackedInventoryDirty = false;
         ExecuteSessionRefresh(() => _session.NotifyContainerInteraction());
-        _ui?.UpdateMetaText(_session.SlotsUsedVirtual, _session.SlotsTotalPhysical, _session.ChestsInRange);
+        _ui?.UpdateMetaText(_session.SlotsUsedDisplay, _session.SlotsTotalPhysical, _session.ChestsInRange);
         _ui?.RefreshContainerGrid(InventoryGui.instance);
     }
 
@@ -268,7 +268,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _nextAllowedWorldRefreshAt = Time.unscaledTime + WorldChangeRefreshMinInterval;
         _trackedInventoryDirty = false;
         ExecuteSessionRefresh(() => _session.RefreshFromWorldChange());
-        _ui?.UpdateMetaText(_session.SlotsUsedVirtual, _session.SlotsTotalPhysical, _session.ChestsInRange);
+        _ui?.UpdateMetaText(_session.SlotsUsedDisplay, _session.SlotsTotalPhysical, _session.ChestsInRange);
         _ui?.RefreshContainerGrid(InventoryGui.instance);
     }
 

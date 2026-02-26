@@ -35,6 +35,16 @@ public sealed class ContainerStorageSource : IStorageSource
         }
     }
 
+    public int DisplaySlotsUsed
+    {
+        get
+        {
+            var inv = _container.GetInventory();
+            if (inv == null) return 0;
+            return inv.GetAllItems().Count;
+        }
+    }
+
     public IReadOnlyList<SourceStack> ReadStacks()
     {
         var inv = _container.GetInventory();

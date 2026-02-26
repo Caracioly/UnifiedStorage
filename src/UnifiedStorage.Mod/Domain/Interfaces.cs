@@ -11,6 +11,7 @@ public interface IStorageSource
     float Distance { get; }
     bool IsValid { get; }
     int PhysicalSlotCount { get; }
+    int DisplaySlotsUsed { get; }
     IReadOnlyList<SourceStack> ReadStacks();
     ItemDrop.ItemData? GetItemPrototype(ItemKey key);
     bool CanPlayerAccess(Player? player);
