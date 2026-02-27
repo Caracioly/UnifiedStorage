@@ -17,8 +17,9 @@ public sealed class TerminalUIManager
     private const float GridTopReserve = 124f;
     private const float ChestToggleTopOffset = -8f;
     private const float SearchWoodBarHeight = 40f;
+    private const float SlotsPlaqueHorizontalOffset = -7f;
     private const float SlotsPlaqueVerticalOffset = 90f;
-    private const float SlotsIconXOffset = 0f;
+    private const float SlotsIconXOffset = 8f;
     private const float SlotsIconYOffset = 30f;
     private const float SlotsIconSize = -10f;
     private const float SlotsTextXOffsetWhenIcon = 7f;
@@ -48,6 +49,7 @@ public sealed class TerminalUIManager
     private bool _slotsPlaqueBuilt;
     private bool _isApplyingChestToggle;
     private int _lastAppliedVisibleRows;
+    private float _slotsBaseFontSize;
 
     public bool IsSearchFocused => _searchInputField != null && _searchInputField.isFocused;
     public string SearchText => _searchInputField?.text ?? string.Empty;
@@ -103,7 +105,7 @@ public sealed class TerminalUIManager
         var clonedBkg = UnityEngine.Object.Instantiate(templateBkg.gameObject, weightRoot, false);
         clonedBkg.name = "US_Slots_bkg";
         _slotsPlaqueBkg = clonedBkg.GetComponent<RectTransform>();
-        _slotsPlaqueBkg.anchoredPosition = templateBkg.anchoredPosition + new Vector2(0f, SlotsPlaqueVerticalOffset);
+        _slotsPlaqueBkg.anchoredPosition = templateBkg.anchoredPosition + new Vector2(SlotsPlaqueHorizontalOffset, SlotsPlaqueVerticalOffset);
         _slotsPlaqueBkg.SetAsLastSibling();
 
         var slotsIconSprite = ResolveSlotsIconSprite();
@@ -132,9 +134,14 @@ public sealed class TerminalUIManager
         clonedText.name = "US_Slots_text";
         _slotsPlaqueTextRoot = clonedText.GetComponent<RectTransform>();
         var textXOffset = _slotsPlaqueIconRoot != null ? SlotsTextXOffsetWhenIcon : 0f;
-        _slotsPlaqueTextRoot.anchoredPosition = templateText.anchoredPosition + new Vector2(textXOffset, SlotsPlaqueVerticalOffset);
+        _slotsPlaqueTextRoot.anchoredPosition = templateText.anchoredPosition + new Vector2(SlotsPlaqueHorizontalOffset + textXOffset, SlotsPlaqueVerticalOffset);
         _slotsPlaqueTextRoot.SetAsLastSibling();
         _metaText = clonedText.GetComponent<TMP_Text>();
+        if (_metaText != null)
+        {
+            _slotsBaseFontSize = _metaText.fontSize;
+            _metaText.enableAutoSizing = false;
+        }
 
         _slotsPlaqueBuilt = _slotsPlaqueBkg != null && _slotsPlaqueTextRoot != null && _metaText != null;
         SetSlotsPlaqueVisible(false);
@@ -407,8 +414,12 @@ public sealed class TerminalUIManager
 
     public void UpdateMetaText(int slotsUsed, int slotsTotal, int chestCount)
     {
-        if (_metaText != null)
-            _metaText.text = $"{Mathf.Max(0, slotsUsed)}/{Mathf.Max(0, slotsTotal)}";
+        if (_metaText == null) return;
+
+        var used = Mathf.Max(0, slotsUsed);
+        var total = Mathf.Max(0, slotsTotal);
+        _metaText.text = $"{used}/{total}";
+        ApplySlotsFontSizing(used, total);
     }
 
     public void UpdateSearchBinding(InventoryGui gui)
@@ -653,8 +664,48 @@ public sealed class TerminalUIManager
         iconRect.anchorMin = templateBkg.anchorMin;
         iconRect.anchorMax = templateBkg.anchorMax;
         iconRect.pivot = templateBkg.pivot;
-        iconRect.anchoredPosition = templateBkg.anchoredPosition + new Vector2(SlotsIconXOffset, SlotsPlaqueVerticalOffset + SlotsIconYOffset);
+        iconRect.anchoredPosition = templateBkg.anchoredPosition + new Vector2(SlotsPlaqueHorizontalOffset + SlotsIconXOffset, SlotsPlaqueVerticalOffset + SlotsIconYOffset);
         iconRect.sizeDelta = new Vector2(SlotsIconSize, SlotsIconSize);
         iconRect.SetAsLastSibling();
+    }
+
+    private void ApplySlotsFontSizing(int used, int total)
+    {
+        if (_metaText == null) return;
+
+        var digitCount = CountDigits(used) + CountDigits(total);
+        var baseSize = _slotsBaseFontSize > 0f ? _slotsBaseFontSize : _metaText.fontSize;
+
+        if (digitCount <= 6)
+        {
+            _metaText.fontSize = baseSize;
+            return;
+        }
+
+        if (digitCount == 7)
+        {
+            _metaText.fontSize = baseSize - 1f;
+            return;
+        }
+
+        if (digitCount == 8)
+        {
+            _metaText.fontSize = baseSize - 2f;
+            return;
+        }
+
+        // 9+ digits (10k+ slots range): keep a readable lower bound and allow overflow if needed.
+        _metaText.fontSize = Mathf.Max(10f, baseSize - 2f);
+    }
+
+    private static int CountDigits(int value)
+    {
+        if (value < 10) return 1;
+        if (value < 100) return 2;
+        if (value < 1000) return 3;
+        if (value < 10000) return 4;
+        if (value < 100000) return 5;
+        if (value < 1000000) return 6;
+        return value.ToString().Length;
     }
 }
