@@ -1,4 +1,5 @@
 using HarmonyLib;
+using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Pieces;
 
 namespace UnifiedStorage.Mod.Patches;
@@ -12,7 +13,7 @@ public static class ContainerInteractPatch
             return true;
 
         var plugin = UnifiedStoragePlugin.Instance;
-        if (plugin != null && plugin.GetNearbyChestCount(__instance.transform.position) == 0)
+        if (plugin != null && plugin.GetNearbyChestCount(__instance.transform.position, StorageScanContext.InteractCheck) == 0)
         {
             player.Message(MessageHud.MessageType.Center, "No chests in range.");
             __result = false;

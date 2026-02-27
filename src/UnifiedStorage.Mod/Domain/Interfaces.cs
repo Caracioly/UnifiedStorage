@@ -24,5 +24,9 @@ public interface IStorageSource
 
 public interface IContainerScanner
 {
-    IReadOnlyList<ChestHandle> GetNearbyContainers(Vector3 center, float radius, Container? ignoreContainer = null);
+    IReadOnlyList<ChestHandle> GetNearbyContainers(
+        Vector3 center,
+        float radius,
+        Container? ignoreContainer = null,
+        StorageScanContext context = StorageScanContext.Unknown);
 }

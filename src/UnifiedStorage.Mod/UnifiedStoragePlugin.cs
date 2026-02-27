@@ -52,7 +52,7 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         _config = new StorageConfig(Config);
         _trace = new StorageTrace(Logger, _config);
 
-        _scanner = new ContainerScanner(_config);
+        _scanner = new ContainerScanner(_config, Logger);
         _authority = new TerminalAuthorityService(_scanner, Logger);
         _rpcRoutes = new TerminalRpcRoutes(_authority, Logger);
         _rpcRoutes.EnsureRegistered();
@@ -205,10 +205,10 @@ public sealed class UnifiedStoragePlugin : BaseUnityPlugin
         Player.m_localPlayer?.Message(MessageHud.MessageType.Center, "Storage is full.");
     }
 
-    internal int GetNearbyChestCount(Vector3 position)
+    internal int GetNearbyChestCount(Vector3 position, StorageScanContext context = StorageScanContext.NearbyCount)
     {
         if (_scanner == null || _config == null) return 0;
-        return _scanner.GetNearbyContainers(position, _config.ScanRadius.Value).Count;
+        return _scanner.GetNearbyContainers(position, _config.ScanRadius.Value, context: context).Count;
     }
 
     internal void OnTrackedInventoryChanged(Inventory inventory)

@@ -1,4 +1,5 @@
 using HarmonyLib;
+using UnifiedStorage.Mod.Domain;
 using UnifiedStorage.Mod.Pieces;
 using UnityEngine;
 
@@ -21,7 +22,7 @@ public static class ContainerHoverTextPatch
         if (instanceId != _cachedInstanceId || now >= _cacheExpiry)
         {
             var plugin = UnifiedStoragePlugin.Instance;
-            _cachedCount = plugin?.GetNearbyChestCount(__instance.transform.position) ?? 0;
+            _cachedCount = plugin?.GetNearbyChestCount(__instance.transform.position, StorageScanContext.HoverPreview) ?? 0;
             _cacheExpiry = now + 2f;
             _cachedInstanceId = instanceId;
         }

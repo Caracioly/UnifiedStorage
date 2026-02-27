@@ -52,6 +52,8 @@ Optional integration:
 - `ScanRadius = 20`
 - `MaxContainersScanned = 128` (global cap; increasing this can significantly impact performance)
 - `EnableDevLogs = false`
+- `EnablePerformanceLogs = false` (aggregated storage scan cost logs for benchmarking)
+- `PerformanceLogIntervalSeconds = 20`
 - `TerminalPieceEnabled = true`
 
 ## Project structure

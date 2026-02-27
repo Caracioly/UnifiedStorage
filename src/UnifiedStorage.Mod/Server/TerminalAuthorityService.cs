@@ -428,7 +428,11 @@ public sealed class TerminalAuthorityService
     {
         var terminal = FindTerminalByUid(state.TerminalUid);
         if (terminal != null) state.AnchorPosition = terminal.transform.position;
-        state.Chests = _scanner.GetNearbyContainers(state.AnchorPosition, state.Radius, terminal).ToList();
+        state.Chests = _scanner.GetNearbyContainers(
+            state.AnchorPosition,
+            state.Radius,
+            terminal,
+            StorageScanContext.AuthoritySnapshot).ToList();
     }
 
     private static int RemoveFromChests(TerminalState state, ItemKey key, int amount, Player? player)
